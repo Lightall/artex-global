@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -1401,6 +1402,11 @@ func (m *Manager) SetTaskStatusGuarded(id, status string) (won bool, err error) 
 	if err != nil {
 		return false, err
 	}
+	if status == "done" {
+		if err := m.pg.CheckVerificationCompletion(context.Background(), n); err != nil {
+			return false, err
+		}
+	}
 	won, err = m.pg.SetTerminalStatusGuarded(n, status)
 	if err != nil || !won {
 		return won, err
@@ -1426,6 +1432,11 @@ func (m *Manager) SetTaskStatus(id, status string) error {
 	n, err := strconv.ParseInt(id, 10, 64)
 	if err != nil {
 		return err
+	}
+	if status == "done" {
+		if err := m.pg.CheckVerificationCompletion(context.Background(), n); err != nil {
+			return err
+		}
 	}
 	if err := m.pg.SetStatus(n, status); err != nil {
 		return err

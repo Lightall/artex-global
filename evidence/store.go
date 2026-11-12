@@ -2,6 +2,7 @@
 package evidence
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -187,6 +188,35 @@ func (s *Store) Record(ctx context.Context, in db.RecordFindingInput, refs []db.
 		prepared, err := s.prepare(ctx, refs)
 		if err != nil {
 			return err
+		}
+		if in.AttemptID > 0 {
+			attempt, _, e := db.VerifiedAttemptTx(ctx, tx, in)
+			if e != nil {
+				return e
+			}
+			for _, o := range attempt.Observations {
+				reqHash, e := s.writeBody(bytes.NewReader(nil), 0, "")
+				if e != nil {
+					return e
+				}
+				respHash, e := s.writeBody(bytes.NewReader(o.Body), int64(len(o.Body)), o.BodyHash)
+				if e != nil {
+					return e
+				}
+				role := "supporting"
+				if o.Phase == "baseline" {
+					role = "baseline"
+				}
+				if o.Phase == "probe" {
+					role = "proof"
+				}
+				if o.Phase == "repeat" {
+					role = "verification"
+				}
+				snapshot := db.TrafficEvidenceSnapshot{SourceTrafficID: fmt.Sprintf("verification:%d:%s", attempt.ID, o.Phase), CapturedAt: o.At.UnixMilli(), URL: o.URL, Method: o.Method, Status: o.Status, ContentType: o.ContentType, ReqHead: fmt.Sprintf("%s %s\nActor-ID: %s\nCredential-SHA256: %s", o.Method, o.URL, o.ActorID, o.Credential), ReqHash: reqHash, RespHash: respHash, RespLen: int64(len(o.Body))}
+				snapshot.ID = db.TrafficSnapshotID(snapshot)
+				prepared = append(prepared, db.PreparedTrafficEvidence{Ref: db.TrafficRef{TrafficID: snapshot.SourceTrafficID, Role: role, Note: o.Phase}, Snapshot: snapshot})
+			}
 		}
 		out, err = db.RecordFindingTx(ctx, tx, in, prepared)
 		return err

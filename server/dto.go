@@ -303,6 +303,9 @@ func coverageAssetRefDTO(ref db.AssetRef) CoverageAssetRefDTO {
 // ---- Finding (frontend "Finding") ----
 
 type FindingDTO struct {
+	VerificationStatus    string                     `json:"verification_status"`
+	VerificationAttemptID string                     `json:"verification_attempt_id,omitempty"`
+	VerificationCaseID    string                     `json:"verification_case_id,omitempty"`
 	TrafficCount          int                        `json:"traffic_count"`
 	EvidenceVersion       int64                      `json:"evidence_version"`
 	ReportEvidenceVersion int64                      `json:"report_evidence_version"`
@@ -380,7 +383,14 @@ type findingPayload struct {
 func findingDTO(n *db.Node) FindingDTO {
 	var p findingPayload
 	_ = json.Unmarshal(n.Payload, &p)
+	var verification struct {
+		Status    string `json:"verification_status"`
+		AttemptID int64  `json:"verification_attempt_id"`
+		CaseID    string `json:"verification_case_id"`
+	}
+	_ = json.Unmarshal(n.Payload, &verification)
 	d := FindingDTO{
+		VerificationStatus: verification.Status, VerificationAttemptID: i64s(verification.AttemptID), VerificationCaseID: verification.CaseID,
 		ID:        i64s(n.ID),
 		VulnClass: p.VulnClass,
 		Name:      p.Name,
@@ -444,6 +454,7 @@ func findingFromDB(f *db.DBFinding, assets map[int64]*db.Asset) FindingDTO {
 		status = db.FindingPending
 	}
 	d := FindingDTO{
+		VerificationStatus: f.VerificationStatus, VerificationAttemptID: i64s(f.VerificationAttemptID), VerificationCaseID: f.VerificationCaseID,
 		ID:           i64s(f.ID),
 		FindingID:    i64s(f.ID),
 		TrafficCount: f.TrafficCount, EvidenceVersion: f.EvidenceVersion, ReportEvidenceVersion: f.ReportEvidenceVersion,

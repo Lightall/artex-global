@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS exploration_nodes (
         (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped','deleted')) OR
         (kind='goal'    AND state IN ('open','met','abandoned')) OR
         (kind='fact'    AND state IN ('confirmed','dismissed','origin')) OR
-        (kind='finding' AND state IN ('confirmed','dismissed')) OR
+        (kind='finding' AND state IN ('candidate','confirmed','dismissed')) OR
         (kind='hint'    AND state IN ('active','consumed')) OR
         (kind='digest'  AND state IN ('active','superseded'))
     )
@@ -216,6 +216,7 @@ BEGIN
 END $$;
 -- ck_node_state: recreate when it lacks the 'paused' (older), 'superseded' (digest rev),
 -- or 'deleted' (intent soft-delete rev) branches.
+-- The local verification MVP also migrates candidate finding states.
 DO $$
 BEGIN
     IF EXISTS (
@@ -224,7 +225,7 @@ BEGIN
           AND conname='ck_node_state'
           AND (pg_get_constraintdef(oid) NOT LIKE '%paused%'
                OR pg_get_constraintdef(oid) NOT LIKE '%superseded%'
-               OR pg_get_constraintdef(oid) NOT LIKE '%deleted%')
+               OR pg_get_constraintdef(oid) NOT LIKE '%deleted%' OR pg_get_constraintdef(oid) NOT LIKE '%candidate%')
     ) THEN
         ALTER TABLE exploration_nodes DROP CONSTRAINT ck_node_state;
         ALTER TABLE exploration_nodes ADD CONSTRAINT ck_node_state CHECK (
@@ -232,7 +233,7 @@ BEGIN
             (kind='intent'  AND state IN ('open','running','paused','done','blocked','exhausted','stopped','deleted')) OR
             (kind='goal'    AND state IN ('open','met','abandoned')) OR
             (kind='fact'    AND state IN ('confirmed','dismissed','origin')) OR
-            (kind='finding' AND state IN ('confirmed','dismissed')) OR
+            (kind='finding' AND state IN ('candidate','confirmed','dismissed')) OR
             (kind='hint'    AND state IN ('active','consumed')) OR
             (kind='digest'  AND state IN ('active','superseded'))
         );
@@ -1101,6 +1102,31 @@ CREATE TABLE IF NOT EXISTS findings (
 );
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending';
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS name   TEXT NOT NULL DEFAULT '';
+
+-- Experimental local verification is opt-in and independent of remediation status.
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS verification_config JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS verification_auth JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS verification_requests INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS test_attempts (
+    id BIGSERIAL PRIMARY KEY,
+    task_id BIGINT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    intent_id BIGINT NOT NULL REFERENCES exploration_nodes(id) ON DELETE CASCADE,
+    case_id TEXT NOT NULL,
+    case_hash TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK(kind IN ('verify','refresh')),
+    state TEXT NOT NULL DEFAULT 'running' CHECK(state IN ('running','completed','failed')),
+    verdict TEXT NOT NULL DEFAULT 'inconclusive',
+    reason TEXT NOT NULL DEFAULT '',
+    observations JSONB NOT NULL DEFAULT '[]',
+    receipt_hash TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS test_attempts_task_case ON test_attempts(task_id,case_id,id DESC);
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS verification_status TEXT NOT NULL DEFAULT 'legacy_unverified';
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS verification_attempt_id BIGINT REFERENCES test_attempts(id) ON DELETE SET NULL;
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS verification_case_id TEXT NOT NULL DEFAULT '';
+CREATE UNIQUE INDEX IF NOT EXISTS findings_verification_attempt ON findings(verification_attempt_id) WHERE verification_attempt_id IS NOT NULL;
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS report TEXT NOT NULL DEFAULT '';
 CREATE INDEX IF NOT EXISTS idx_findings_task ON findings(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_findings_time ON findings(created_at DESC);

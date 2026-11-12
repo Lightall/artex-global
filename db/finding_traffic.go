@@ -326,15 +326,19 @@ func (d *DB) EditFindingTraffic(ctx context.Context, findingID, bindingID, versi
 }
 
 type RecordFindingInput struct {
+	AttemptID                                            int64
+	VerificationCaseID                                   string
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
 }
 
 type RecordedFinding struct {
-	FindingID int64           `json:"finding_id,string"`
-	NodeID    int64           `json:"finding_node_id,string"`
-	Traffic   *FindingTraffic `json:"traffic"`
+	VerificationStatus    string          `json:"verification_status"`
+	VerificationAttemptID int64           `json:"verification_attempt_id,string"`
+	FindingID             int64           `json:"finding_id,string"`
+	NodeID                int64           `json:"finding_node_id,string"`
+	Traffic               *FindingTraffic `json:"traffic"`
 }
 
 // ctx 由调用方传入本次事务所用的上下文（而非在内部取 context.Background）：
@@ -361,10 +365,45 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 			return nil, errors.New("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
-	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}})
-	out := &RecordedFinding{}
-	if err := tx.QueryRow(`INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin)
-VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string(payload), in.Worker).Scan(&out.NodeID); err != nil {
+
+	verificationStatus, nodeState := "legacy_unverified", "confirmed"
+	var config []byte
+	if in.TaskID > 0 {
+		if err := tx.QueryRowContext(ctx, `SELECT verification_config FROM tasks WHERE id=$1`, in.TaskID).Scan(&config); err != nil {
+			return nil, err
+		}
+		var c struct {
+			Cases []json.RawMessage `json:"cases"`
+		}
+		if err := json.Unmarshal(config, &c); err != nil {
+			return nil, err
+		}
+		if len(c.Cases) > 0 {
+			verificationStatus, nodeState = "candidate", "candidate"
+		}
+	}
+	if in.AttemptID > 0 {
+		attempt, _, err := VerifiedAttemptTx(ctx, tx, in)
+		if err != nil {
+			return nil, err
+		}
+		for _, obs := range attempt.Observations {
+			found := false
+			for _, proof := range prepared {
+				if proof.Snapshot.SourceTrafficID == fmt.Sprintf("verification:%d:%s", attempt.ID, obs.Phase) && proof.Snapshot.RespHash == obs.BodyHash && proof.Snapshot.URL == obs.URL && proof.Snapshot.Status == obs.Status {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil, errors.New("durable verification evidence missing; use the evidence recorder")
+			}
+		}
+		verificationStatus, nodeState = "reproduced", "confirmed"
+	}
+	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}, "verification_status": verificationStatus, "verification_attempt_id": in.AttemptID, "verification_case_id": in.VerificationCaseID})
+	out := &RecordedFinding{VerificationStatus: verificationStatus, VerificationAttemptID: in.AttemptID}
+	if err := tx.QueryRowContext(ctx, `INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin) VALUES($1,'finding',$2,9,$3,$4) RETURNING id`, in.ExplorationID, string(payload), nodeState, in.Worker).Scan(&out.NodeID); err != nil {
 		return nil, err
 	}
 	for _, asset := range in.AssetIDs {
@@ -384,6 +423,9 @@ VALUES($1,'finding',$2,9,'confirmed',$3) RETURNING id`, in.ExplorationID, string
 	raw, _ := json.Marshal(assets)
 	if err := tx.QueryRow(`INSERT INTO findings(task_id,node_id,vulnclass,name,severity,summary,evidence,worker,asset_ids)
 VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.TaskID, out.NodeID, in.VulnClass, in.Name, in.Severity, in.Summary, in.Evidence, in.Worker, string(raw)).Scan(&out.FindingID); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE findings SET verification_status=$2,verification_attempt_id=NULLIF($3,0),verification_case_id=$4 WHERE id=$1`, out.FindingID, verificationStatus, in.AttemptID, in.VerificationCaseID); err != nil {
 		return nil, err
 	}
 	// 在**同一事务**里登记一条推送事件：提交即保证「漏洞落库」与「推送任务存在」

@@ -61,6 +61,12 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 		out = ToolResolve(ctx, agentKey, out)
 	}
 	out, def.FindingGuidance = findingWorkflowTools(agentKey, out)
+	for _, tool := range out {
+		if tool.Name() == "run_http_case" {
+			def.FindingGuidance += "\n\n**本地实验验证**：若 graph_overview.verification 有 operator 配置的 cases，使用 run_http_case 形成真实对照和复现回执。inconclusive 只代表条件不足，不得把它说成该方向无漏洞；owner_identity_invalid/other_identity_invalid 时先用 refresh_http_case_auth 补齐登录态后再测（预算最多一次补齐、两次测试）。reproduced 才可用 report_finding(vulnclass=IDOR, attempt_id, verification_case_id, asset_ids) 上报已复现；缺回执仅登记候选。候选、未复现和条件不足不计入已确认漏洞目标。"
+			break
+		}
+	}
 	// Register lowercase/snake_case aliases for the CamelCase built-ins (Bash →
 	// bash, WebFetch → web_fetch) and defer them, so a model that drifts to the
 	// model-conventional spelling still hits the handler while the model keeps
