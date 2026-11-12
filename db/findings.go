@@ -82,7 +82,7 @@ func ValidSeverity(s string) bool {
 // AddFinding inserts a finding into the standalone findings table. taskID and
 // nodeID may be 0 (stored as NULL). name may be "" (frontend falls back to
 // vulnclass). Returns the new finding id.
-func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64) (int64, error) {
+func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary, evidence, worker string, assetIDs []int64) (id int64, err error) {
 	aidsJSON, _ := json.Marshal(assetIDs)
 	if assetIDs == nil {
 		aidsJSON = []byte("[]")
@@ -94,12 +94,45 @@ func (d *DB) AddFinding(taskID, nodeID int64, vulnclass, name, severity, summary
 	if nodeID > 0 {
 		nid = &nodeID
 	}
-	var id int64
-	err := d.QueryRow(
-		`INSERT INTO findings (task_id, node_id, vulnclass, name, severity, summary, evidence, worker, asset_ids)
+	err = d.WithEvidenceTx(context.Background(), func(tx *sql.Tx) error {
+		// Legacy writers cannot silently opt an experiment-scoped task out of its
+		// proof gate, including a caller that supplies only its graph node ID.
+		var expID int64
+		if nodeID > 0 {
+			if err := tx.QueryRow(`SELECT exploration_id FROM exploration_nodes WHERE id=$1`, nodeID).Scan(&expID); err != nil {
+				return err
+			}
+		}
+		if taskID > 0 {
+			if err := LockTaskEvidenceTx(tx, taskID); err != nil {
+				return err
+			}
+			var taskExpID int64
+			if err := tx.QueryRow(`SELECT exploration_id FROM tasks WHERE id=$1`, taskID).Scan(&taskExpID); err != nil {
+				return err
+			}
+			if expID > 0 && expID != taskExpID {
+				return errors.New("finding task/node mismatch")
+			}
+			expID = taskExpID
+		} else if expID > 0 {
+			if _, err := lockExplorationTaskTx(tx, expID); err != nil {
+				return err
+			}
+		}
+		has, err := hasExperimentGoalsTx(tx, expID)
+		if err != nil {
+			return err
+		}
+		if has {
+			return errors.New("experiment-scoped findings require RecordFinding with verified experiment evidence")
+		}
+		return tx.QueryRow(
+			`INSERT INTO findings (task_id, node_id, vulnclass, name, severity, summary, evidence, worker, asset_ids)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-		tid, nid, vulnclass, name, severity, summary, evidence, worker, string(aidsJSON),
-	).Scan(&id)
+			tid, nid, vulnclass, name, severity, summary, evidence, worker, string(aidsJSON),
+		).Scan(&id)
+	})
 	return id, err
 }
 

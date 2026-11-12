@@ -553,6 +553,14 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 			}
 		}
 	}
+	if t.ts != nil {
+		if cases, err := t.ts.SecurityExperiments(); err != nil {
+			out["security_experiments_error"] = "实验态势读取失败，不能假定没有待验证实验"
+		} else if len(cases) > 0 {
+			out["security_experiments"] = cases
+			out["security_experiments_note"] = "这些是操作者配置的安全实验。未执行/前置不足/无法确认均未完成验证；派意图让 worker 用 run_security_experiment(case_id) 执行。资产 coverage 仅表示触达，不表示这些安全性质已验证。not_reproduced 仅限指定身份/对象/当次状态，条件改变应新建实验；不得推广为整个资产安全。"
+		}
+	}
 	return out
 }
 
@@ -891,6 +899,10 @@ func compactFinding(n *db.Node) map[string]any {
 	var p map[string]any
 	_ = json.Unmarshal(n.Payload, &p)
 	m := map[string]any{"id": n.ID, "state": n.State, "summary": p["summary"]}
+	if id, ok := p["experiment_evidence_id"]; ok {
+		m["experiment_evidence_id"] = id
+		m["security_experiment_case_id"] = p["security_experiment_case_id"]
+	}
 	if n.Inherited {
 		inheritedMap(m, n.SourceTaskID)
 	}
@@ -1167,6 +1179,7 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 			"reason":      str("为什么这个证据满足该目标"),
 		}, "goal_id", "evidence_id"),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			t.GoalMet = false
 			var a struct {
 				GoalID     json.RawMessage `json:"goal_id"`
 				EvidenceID json.RawMessage `json:"evidence_id"`
@@ -1191,21 +1204,15 @@ func (t *ToolSet) proveGoal() actool.CoreTool {
 			if err := t.ts.CheckVerificationEvidence(ev); err != nil {
 				return actool.Errorf(err.Error()), nil
 			}
-			_ = t.ts.Link(ev, db.RelProves, goal)
-			_ = t.ts.SetNodeState(goal, "met")
+			if err := t.ts.ProveGoal(goal, ev); err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
 			// 每标记一个目标 met，就检查本任务是否【所有目标】都已 met；若是，自动判定
 			// 任务完成（置 GoalMet），无需再依赖模型显式调 goal_met。
-			if goals, err := t.ts.ListByKind(db.KindGoal, 1000); err == nil && len(goals) > 0 {
-				allMet := true
-				for _, g := range goals {
-					if g.State != "met" {
-						allMet = false
-						break
-					}
-				}
+			if allMet, count, err := t.ts.AllGoalsMet(); err == nil {
 				if allMet {
 					t.GoalMet = true
-					t.Reason = fmt.Sprintf("所有 %d 个目标均已 met（最后由 goal %d 触发）", len(goals), goal)
+					t.Reason = fmt.Sprintf("所有 %d 个目标均已 met（最后由 goal %d 触发）", count, goal)
 					return actool.Text(fmt.Sprintf("goal %d marked met；本任务所有目标均已达成，任务自动判定完成", goal)), nil
 				}
 			}
@@ -1217,6 +1224,13 @@ func (t *ToolSet) goalMet() actool.CoreTool {
 	return writeTool("goal_met", "【立即结束整个任务】——仅当你确认任务的【全部目标都已真正达成、整体收官】时才调（注意是任务【整体】完成；仅仅达成了其中某一个目标/某一个 flag/某一个漏洞【不算】——那种情况用 prove_goal 标记该目标即可）。⚠️它不是用来“结束本轮规划”的：本轮没有新意图要派、或在等 worker 产出，都【直接结束本轮即可，不要调本工具】（0 个意图是完全正常的）。正常判定优先用 prove_goal 逐个证明目标；goal_met 只是绕过逐个证明、直接从全局收官的手段。",
 		obj(map[string]any{"reason": str("达成理由（必须是目标真正达成的证据，不能是“本轮无新方向”这类结束本轮的理由）")}, "reason"),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+			if t.ts != nil {
+				has, err := t.ts.HasSecurityExperimentGoals()
+				if err != nil || has {
+					t.GoalMet = false
+					return actool.Errorf("本任务存在受实验约束的目标，或约束状态无法读取；必须用 prove_goal 提交当前实验的有效证据，不能全局跳过"), nil
+				}
+			}
 			var a struct{ Reason string }
 			_ = json.Unmarshal(in, &a)
 			if t.ts != nil {
@@ -1236,10 +1250,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 	return writeTool("report_finding", "记录确认的漏洞，用 evidence 提供命令输出、日志等可验证证据。任务上下文传当前 intent_id。返回的 finding_id 是独立漏洞记录 ID，finding_node_id 是探索节点 ID（第一行保留该节点编号）。", obj(map[string]any{
 		"vulnclass": str("漏洞类别"), "name": str("漏洞名称"), "severity": str("critical|high|medium|low"), "summary": str("发现摘要"),
 		"intent_id": idp("当前任务的意图 id"), "asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "受影响资产 id"},
-		"attempt_id":           idp("可选：run_http_case 返回的真实实验 ID；模型不能自行声明已复现"),
-		"verification_case_id": str("attempt_id 所属的 operator 配置 case_id"),
-		"evidence":             str("证据/PoC 文本"),
-		"evidence_hint_id":     idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
+		"attempt_id":             idp("可选：run_http_case 返回的真实实验 ID；模型不能自行声明已复现"),
+		"verification_case_id":   str("attempt_id 所属的 operator 配置 case_id"),
+		"evidence":               str("证据/PoC 文本"),
+		"experiment_evidence_id": idp("实验约束任务必填：run_security_experiment 返回的有效 evidence_id。执行器完整证据由程序核验并入库；文字 evidence 不能替代。"),
+		"evidence_hint_id":       idp("可选：本任务中对应此漏洞的提示节点 ID，自动携带其结构化 traffic_refs；不能引用继承提示或其他漏洞的提示"),
 		"traffic_refs": map[string]any{"type": "array", "description": "可选；HTTP/HTTPS 漏洞先检索并逐条核实请求/响应确实支持漏洞结论，再按复现顺序填写真实 ID。TCP 等非 HTTP 漏洞、未采集或找不到确切记录时省略或传 []，不阻止上报；可在 evidence 说明原因并提供其他可验证证据。不要猜测 ID、按域名/时间推定关联或仅为补包重复探测。用途 baseline 正常对照 / proof 漏洞证明 / verification 补充验证 / supporting 辅助证据。",
 			"items": obj(map[string]any{"traffic_id": str("traffic_search 返回的真实流量 ID"), "role": map[string]any{"type": "string", "enum": []string{"baseline", "proof", "verification", "supporting"}}, "note": str("该流量如何支持漏洞结论")}, "traffic_id")},
 	}, "vulnclass", "severity", "summary"), func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
@@ -1251,6 +1266,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			AssetIDs                                     []json.RawMessage `json:"asset_ids"`
 			TrafficRefs                                  []db.TrafficRef   `json:"traffic_refs"`
 			EvidenceHintID                               json.RawMessage   `json:"evidence_hint_id"`
+			ExperimentEvidenceID                         json.RawMessage   `json:"experiment_evidence_id"`
 		}
 		if err := json.Unmarshal(in, &a); err != nil {
 			return actool.Errorf(err.Error()), nil
@@ -1273,7 +1289,7 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 		if err != nil {
 			return actool.Errorf(err.Error()), nil
 		}
-		input := db.RecordFindingInput{AttemptID: pid(a.AttemptID), VerificationCaseID: a.VerificationCaseID, TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs)}
+		input := db.RecordFindingInput{AttemptID: pid(a.AttemptID), VerificationCaseID: a.VerificationCaseID, TaskID: t.taskID, ExplorationID: t.ts.ID(), IntentID: pid(a.IntentID), ExperimentEvidenceID: pid(a.ExperimentEvidenceID), VulnClass: a.VulnClass, Name: a.Name, Severity: a.Severity, Summary: a.Summary, Evidence: a.Evidence, Worker: t.worker, AssetIDs: pidList(a.AssetIDs)}
 		var recorded *db.RecordedFinding
 		if t.findingRecorder != nil {
 			recorded, err = t.findingRecorder.Record(ctx, input, refs)
@@ -1290,7 +1306,11 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			if iid <= 0 {
 				iid = t.ownerNode
 			}
-			t.notifyFinding(iid, a.Summary)
+			summary := recorded.Summary
+			if summary == "" {
+				summary = a.Summary
+			}
+			t.notifyFinding(iid, summary)
 		} else if t.notify != nil {
 			t.notify()
 		}
@@ -1311,6 +1331,10 @@ func (t *ToolSet) addFinding() actool.CoreTool {
 			if !findingTrafficBindingEnabled() {
 				result.EvidenceNote = "漏洞已保存。Agent 自动绑定流量已关闭，可在页面人工关联流量。"
 			}
+		}
+		if recorded.ExperimentEvidenceID > 0 {
+			result.EvidenceStatus = "experiment_verified"
+			result.EvidenceNote = "执行器证据已核验并保存在漏洞完整 evidence/PoC；报告 Agent 用 get_task_node_detail 读取。漏洞处置仍为独立的待审核状态。"
 		}
 		raw, _ := json.Marshal(result)
 		return actool.Text(fmt.Sprintf("finding recorded: %d\n%s", recorded.NodeID, raw)), nil
@@ -2052,6 +2076,7 @@ func (t *ToolSet) listWorkerTraces() actool.CoreTool {
 // PlannerTools is the read + intent-generation + goal-judgement tool set.
 func (t *ToolSet) PlannerTools() []actool.CoreTool {
 	return []actool.CoreTool{
+		t.listSecurityExperiments(), t.getSecurityExperiment(),
 		t.graphOverview(), t.listFindings(), t.listFacts(), t.nodeDetail(),
 		// cold-digest §6.1: restore folded cold nodes (digest body → members → detail).
 		t.expandDigest(),

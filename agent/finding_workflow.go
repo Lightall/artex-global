@@ -23,6 +23,25 @@ func findingTrafficBindingEnabled() bool {
 // all actual reporters (including Planner and custom chat agents) see the same
 // API contract. Disabled/unbound tools are never reintroduced here.
 func findingWorkflowTools(agentKey string, tools []actool.CoreTool) ([]actool.CoreTool, string) {
+	// Old persisted schemas may predate the experiment parameter. Upgrade only
+	// tools that survived resolution, retaining user descriptions and bindings.
+	tools = append([]actool.CoreTool(nil), tools...)
+	for i, tool := range tools {
+		if tool.Name() != "report_finding" {
+			continue
+		}
+		raw, _ := json.Marshal(tool.InputSchema())
+		var schema map[string]any
+		if json.Unmarshal(raw, &schema) == nil {
+			props, _ := schema["properties"].(map[string]any)
+			if props == nil {
+				props = map[string]any{}
+				schema["properties"] = props
+			}
+			props["experiment_evidence_id"] = idp("实验约束任务必填：run_security_experiment 返回的 evidence_id；完整执行证据由程序核验并入库，不能用文字 evidence 替代。")
+			tools[i] = DecorateTool(tool, tool.Description()+"\n实验约束任务先执行 run_security_experiment，再用 experiment_evidence_id 登记 finding，最后 prove_goal。未知、过期或未复核的证据不能登记漏洞或完成目标。", schema)
+		}
+	}
 	if !findingTrafficBindingEnabled() {
 		out := make([]actool.CoreTool, 0, len(tools))
 		for _, tool := range tools {

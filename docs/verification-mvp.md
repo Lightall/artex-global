@@ -6,6 +6,12 @@ benchmark is part of its engineering acceptance.
 
 ## Supported experiment
 
+The branch also provides the separately configured security-experiment mode in
+`docs/security-experiments.md`. A task must use one mode: both operator write
+paths reject mixed configuration without removing the existing requirement.
+HTTP attempt IDs and security-experiment evidence node IDs are distinct;
+`experiment_verified` metadata does not claim an HTTP `test_attempts` receipt.
+
 The operator configures a private JSON resource, its ownership/access rule,
 two actor identities, identity checks, login refresh, and JSON pointers for
 the object, owner, private flag, protected value and explicit denial.

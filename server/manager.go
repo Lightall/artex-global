@@ -914,6 +914,7 @@ func (m *Manager) CreateTaskWithOptions(description, goal string, opts pgdb.Task
 		return nil, err
 	}
 	t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor)
+	t.Store.SetExperimentStateObserver(func() error { return m.refreshExperimentTaskState(pt.ID) })
 	m.mu.Lock()
 	m.tasks[t.ID] = t
 	m.active = t.ID
@@ -1113,6 +1114,7 @@ func (m *Manager) LoadExisting() []*Task {
 			continue
 		}
 		t := taskFromPG(pt, m.pg.Exploration(pt.ExplorationID), m.interceptor)
+		t.Store.SetExperimentStateObserver(func() error { return m.refreshExperimentTaskState(pt.ID) })
 		m.tasks[id] = t
 		loaded = append(loaded, t)
 	}

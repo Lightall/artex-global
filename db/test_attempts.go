@@ -41,6 +41,17 @@ func (d *DB) SetHTTPVerificationConfig(ctx context.Context, taskID int64, c veri
 		if err := LockTaskEvidenceTx(tx, taskID); err != nil {
 			return err
 		}
+		var expID int64
+		if err := tx.QueryRowContext(ctx, `SELECT exploration_id FROM tasks WHERE id=$1`, taskID).Scan(&expID); err != nil {
+			return err
+		}
+		has, err := hasExperimentGoalsTx(tx, expID)
+		if err != nil {
+			return err
+		}
+		if has {
+			return errors.New("task already uses security experiments; configure HTTP verification in a separate task")
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE tasks SET verification_config=$2,verification_auth='{}',verification_requests=0 WHERE id=$1 AND deleted_at IS NULL`, taskID, b)
 		if err != nil {
 			return err

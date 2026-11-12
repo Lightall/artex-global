@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -478,6 +479,15 @@ func (d *DB) SetQueued(id int64, queued bool) error {
 // stable); moving back to a non-terminal state clears it, so a re-run has no stale
 // finish time.
 func (d *DB) SetStatus(id int64, status string) error {
+	if status == "done" {
+		return d.WithEvidenceTx(context.Background(), func(tx *sql.Tx) error {
+			if err := validateExperimentCompletionTx(tx, id); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`UPDATE tasks SET status='done',completed_at=COALESCE(completed_at,now()) WHERE id=$1`, id)
+			return err
+		})
+	}
 	_, err := d.Exec(`
 UPDATE tasks
    SET status = $1,
@@ -491,6 +501,20 @@ UPDATE tasks
 // Returns won=false (no error) when another terminal status already stuck — the
 // caller then leaves it alone. Non-terminal transitions / re-run still use SetStatus.
 func (d *DB) SetTerminalStatusGuarded(id int64, status string) (won bool, err error) {
+	if status == "done" {
+		err = d.WithEvidenceTx(context.Background(), func(tx *sql.Tx) error {
+			if err := validateExperimentCompletionTx(tx, id); err != nil {
+				return err
+			}
+			res, err := tx.Exec(`UPDATE tasks SET status='done',completed_at=COALESCE(completed_at,now()) WHERE id=$1 AND status NOT IN ('done','failed','timeout')`, id)
+			if err == nil {
+				n, e := res.RowsAffected()
+				won, err = n > 0, e
+			}
+			return err
+		})
+		return won && err == nil, err
+	}
 	res, err := d.Exec(`
 UPDATE tasks
    SET status = $1,

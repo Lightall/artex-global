@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -170,8 +171,22 @@ func (d *DB) TokenDailyAll(days int) ([]DailyTokenBucket, error) {
 
 // ExplorationStore is a handle onto one exploration's reasoning graph + activity.
 type ExplorationStore struct {
-	db    *DB
-	expID int64
+	db                     *DB
+	expID                  int64
+	experimentStateChanged func() error
+}
+
+// SetExperimentStateObserver is wired before the store is published by its
+// runtime owner. Observers refresh lifecycle only; they must not start models.
+func (s *ExplorationStore) SetExperimentStateObserver(fn func() error) {
+	s.experimentStateChanged = fn
+}
+
+func (s *ExplorationStore) notifyExperimentState() error {
+	if s.experimentStateChanged != nil {
+		return s.experimentStateChanged()
+	}
+	return nil
 }
 
 // CreateExploration creates a new exploration root and returns its id.
@@ -195,12 +210,27 @@ func (s *ExplorationStore) Root() (description, goal string, err error) {
 
 // AddNode writes a typed reasoning node with optional anchors to asset ids.
 func (s *ExplorationStore) AddNode(kind string, payload map[string]any, priority int, state, origin string, anchors []int64) (int64, error) {
+	if origin == securityExperimentOrigin {
+		return 0, fmt.Errorf("security-experiment origin is reserved for the executor")
+	}
 	raw, _ := json.Marshal(payload)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
+	if kind == KindFinding {
+		if _, err := lockExplorationTaskTx(tx, s.expID); err != nil {
+			return 0, err
+		}
+		has, err := hasExperimentGoalsTx(tx, s.expID)
+		if err != nil {
+			return 0, err
+		}
+		if has {
+			return 0, fmt.Errorf("experiment-scoped findings must use RecordFinding with verified experiment evidence")
+		}
+	}
 	var id int64
 	if err := tx.QueryRow(`
 INSERT INTO exploration_nodes(exploration_id, kind, payload, priority, state, origin)
@@ -266,7 +296,19 @@ ON CONFLICT (exploration_id, src_id, rel, dst_id) DO NOTHING`, s.expID, from, re
 // SetNodeState updates any node's state (never deletes). content_version bumps
 // so a folded member's state flip invalidates its digest's cached body (§5.3).
 func (s *ExplorationStore) SetNodeState(id int64, state string) error {
-	_, err := s.db.Exec(`UPDATE exploration_nodes SET state=$1, blocked_reason=NULL, content_version=content_version+1 WHERE id=$2 AND exploration_id=$3`, state, id, s.expID)
+	res, err := s.db.Exec(`UPDATE exploration_nodes SET state=$1, blocked_reason=NULL, content_version=content_version+1 WHERE id=$2 AND exploration_id=$3
+AND NOT ($1='met' AND kind='goal' AND payload ? 'security_experiment_case_id')`, state, id, s.expID)
+	if err == nil {
+		if n, _ := res.RowsAffected(); n == 0 {
+			node, e := s.GetNode(id)
+			if e != nil {
+				return e
+			}
+			if node != nil && node.Kind == KindGoal && state == "met" {
+				return fmt.Errorf("experiment-bound goals require ProveGoal with verified finding evidence")
+			}
+		}
+	}
 	return err
 }
 
@@ -279,14 +321,32 @@ func (s *ExplorationStore) UpdateGoalPayload(id int64, text, vulnclass string) e
 		payload["vulnclass"] = vulnclass
 	}
 	raw, _ := json.Marshal(payload)
-	res, err := s.db.Exec(`UPDATE exploration_nodes SET payload=$1 WHERE id=$2 AND exploration_id=$3 AND kind='goal'`, string(raw), id, s.expID)
+	// Preserve operator-owned requirements when the public goal editor updates
+	// text. Replacing the entire payload would silently remove the proof gate.
+	err := s.db.WithEvidenceTx(context.Background(), func(tx *sql.Tx) error {
+		taskID, err := lockExplorationTaskTx(tx, s.expID)
+		if err != nil {
+			return err
+		}
+		res, err := tx.Exec(`UPDATE exploration_nodes SET payload=(payload-'vulnclass') || $1::jsonb,
+state=CASE WHEN payload ? 'security_experiment_case_id' THEN 'open' ELSE state END,
+content_version=content_version+1 WHERE id=$2 AND exploration_id=$3 AND kind='goal'`, string(raw), id, s.expID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("目标不存在")
+		}
+		has, err := hasExperimentGoalsTx(tx, s.expID)
+		if err != nil || !has {
+			return err
+		}
+		return reopenExperimentTaskTx(tx, taskID)
+	})
 	if err != nil {
 		return err
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("目标不存在")
-	}
-	return nil
+	return s.notifyExperimentState()
 }
 
 // DeleteGoal hard-deletes a goal node; scoped to kind='goal' so it can never drop

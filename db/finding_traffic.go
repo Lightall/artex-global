@@ -328,6 +328,7 @@ func (d *DB) EditFindingTraffic(ctx context.Context, findingID, bindingID, versi
 type RecordFindingInput struct {
 	AttemptID                                            int64
 	VerificationCaseID                                   string
+	ExperimentEvidenceID                                 int64
 	TaskID, ExplorationID, IntentID                      int64
 	VulnClass, Name, Severity, Summary, Evidence, Worker string
 	AssetIDs                                             []int64
@@ -336,6 +337,8 @@ type RecordFindingInput struct {
 type RecordedFinding struct {
 	VerificationStatus    string          `json:"verification_status"`
 	VerificationAttemptID int64           `json:"verification_attempt_id,string"`
+	Summary               string          `json:"summary,omitempty"`
+	ExperimentEvidenceID  int64           `json:"experiment_evidence_id,omitempty,string"`
 	FindingID             int64           `json:"finding_id,string"`
 	NodeID                int64           `json:"finding_node_id,string"`
 	Traffic               *FindingTraffic `json:"traffic"`
@@ -365,7 +368,6 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 			return nil, errors.New("intent_id 必须是本任务的意图（关联任务意图只读）")
 		}
 	}
-
 	verificationStatus, nodeState := "legacy_unverified", "confirmed"
 	var config []byte
 	if in.TaskID > 0 {
@@ -401,8 +403,41 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 		}
 		verificationStatus, nodeState = "reproduced", "confirmed"
 	}
-	payload, _ := json.Marshal(map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}, "verification_status": verificationStatus, "verification_attempt_id": in.AttemptID, "verification_case_id": in.VerificationCaseID})
-	out := &RecordedFinding{VerificationStatus: verificationStatus, VerificationAttemptID: in.AttemptID}
+	has, err := hasExperimentGoalsTx(tx, in.ExplorationID)
+	if err != nil {
+		return nil, err
+	}
+	var experimentCaseID int64
+	if has || in.ExperimentEvidenceID > 0 {
+		if in.TaskID <= 0 || in.ExperimentEvidenceID <= 0 {
+			return nil, errors.New("experiment-scoped tasks require experiment_evidence_id from a completed verified run")
+		}
+		c, run, err := experimentProofTx(tx, in.ExplorationID, in.ExperimentEvidenceID)
+		if err != nil {
+			return nil, err
+		}
+		if existing, err := registeredExperimentFindingTx(tx, in.TaskID, in.ExplorationID, run.ID); err == nil {
+			existing.Traffic, err = FindingTrafficTx(tx, existing.FindingID)
+			return existing, err
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		in.ExperimentEvidenceID = run.ID
+		verificationStatus, nodeState = "experiment_verified", "confirmed"
+		experimentCaseID = c.ID
+		in.Evidence = experimentFindingEvidence(c, run)
+		// The verified claim must describe what this executor can establish.
+		// Severity remains a proposal subject to the separate pending triage.
+		in.Name, in.VulnClass = c.Spec.Name, "BOLA"
+		in.Summary = fmt.Sprintf("Verified identity/object isolation violation: principal %q received owner %q's protected scalar for object %q in two repetitions (case %d, run %d). Scope: configured identities, object and observed state only.", c.Spec.Other.PrincipalID, c.Spec.Owner.PrincipalID, c.Spec.ObjectID, c.ID, run.ID)
+	}
+	p := map[string]any{"vulnclass": in.VulnClass, "name": in.Name, "severity": in.Severity, "summary": in.Summary, "evidence": map[string]any{"by": in.Worker, "poc": in.Evidence}}
+	p["verification_status"], p["verification_attempt_id"], p["verification_case_id"] = verificationStatus, in.AttemptID, in.VerificationCaseID
+	if in.ExperimentEvidenceID > 0 {
+		p["experiment_evidence_id"], p["security_experiment_case_id"] = in.ExperimentEvidenceID, experimentCaseID
+	}
+	payload, _ := json.Marshal(p)
+	out := &RecordedFinding{VerificationStatus: verificationStatus, VerificationAttemptID: in.AttemptID, ExperimentEvidenceID: in.ExperimentEvidenceID, Summary: in.Summary}
 	if err := tx.QueryRowContext(ctx, `INSERT INTO exploration_nodes(exploration_id,kind,payload,priority,state,origin) VALUES($1,'finding',$2,9,$3,$4) RETURNING id`, in.ExplorationID, string(payload), nodeState, in.Worker).Scan(&out.NodeID); err != nil {
 		return nil, err
 	}
@@ -413,6 +448,11 @@ func RecordFindingTx(ctx context.Context, tx *sql.Tx, in RecordFindingInput, pre
 	}
 	if in.IntentID > 0 {
 		if _, err := tx.Exec(`INSERT INTO exploration_edges(exploration_id,src_id,rel,dst_id) VALUES($1,$2,$3,$4)`, in.ExplorationID, in.IntentID, RelYields, out.NodeID); err != nil {
+			return nil, err
+		}
+	}
+	if in.ExperimentEvidenceID > 0 {
+		if _, err := tx.Exec(`INSERT INTO exploration_edges(exploration_id,src_id,rel,dst_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, in.ExplorationID, in.ExperimentEvidenceID, RelProves, out.NodeID); err != nil {
 			return nil, err
 		}
 	}
@@ -444,7 +484,6 @@ VALUES(NULLIF($1,0),$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, in.TaskID, out.NodeI
 	if err := AddFindingTrafficTx(tx, out.FindingID, prepared); err != nil {
 		return nil, err
 	}
-	var err error
 	out.Traffic, err = FindingTrafficTx(tx, out.FindingID)
 	return out, err
 }
