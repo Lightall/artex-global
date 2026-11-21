@@ -3395,10 +3395,11 @@
         }
       },
       "effort": {
-        "label": "Reasoning effort · reasoning_effort",
-        "hint": "An independent effort level (OpenAI reasoning_effort / Anthropic output_config.effort). Some interfaces have no thinking field and turn on reasoning through effort alone, so you can set effort on its own without sending the thinking switch.",
+        "label": "Reasoning effort",
+        "hint": "Unspecified omits the effort field. A selected level is sent on requests using this profile. Provider support and mappings vary. The thinking toggle is independent.",
+        "locked": "Fixed {level}",
         "opt": {
-          "none": "Don't send (default)"
+          "none": "Unspecified (provider default)"
         }
       },
       "testing": "Testing…",

@@ -49,8 +49,14 @@ func matchOne(r AssetInterceptRule, domains, ips, urls []string) (string, bool) 
 	}
 	switch r.Kind {
 	case "exact_domain":
+		patternDomain := normalizeTaskDomain(p)
 		for _, d := range domains {
-			if strings.EqualFold(strings.TrimSpace(d), p) {
+			candidateDomain := normalizeTaskDomain(strings.TrimSpace(d))
+			if patternDomain != "" && candidateDomain != "" {
+				if candidateDomain == patternDomain {
+					return d, true
+				}
+			} else if strings.EqualFold(strings.TrimSpace(d), p) {
 				return d, true
 			}
 		}
@@ -218,31 +224,26 @@ func (s *AssetStore) CheckAssetsIntercept(taskID int64, ids []int64) ([]AssetInt
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	blockRules, err := s.db.ListAssetInterceptRules()
+	gate, err := s.LoadTaskAssetGate(taskID)
 	if err != nil {
 		return nil, err
-	}
-	var allowRules []AssetInterceptRule
-	if taskID > 0 {
-		tb, ta, err := s.TaskInterceptRulesSplit(taskID)
-		if err != nil {
-			return nil, err
-		}
-		blockRules = append(blockRules, tb...)
-		allowRules = ta
-	}
-	// 既无拦截规则、也无启用的允许规则 → 无需判定，全部放行。
-	if len(blockRules) == 0 && !hasEnabledRule(allowRules) {
-		return nil, nil
 	}
 	assets, err := s.GetByIDs(ids)
 	if err != nil {
 		return nil, err
 	}
+	found := make(map[int64]bool, len(assets))
+	for _, asset := range assets {
+		found[asset.ID] = true
+	}
+	for _, id := range ids {
+		if !found[id] {
+			return nil, fmt.Errorf("asset %d does not exist; scope validation is unknown", id)
+		}
+	}
 	var hits []AssetInterceptHit
 	for _, a := range assets {
-		domains, ips, urls := a.interceptCandidates()
-		if d := EvaluateAssetGate(blockRules, allowRules, domains, ips, urls); !d.Allowed {
+		if d := gate.Evaluate(a); !d.Allowed {
 			hits = append(hits, AssetInterceptHit{Asset: a, Reason: d.Reason})
 		}
 	}

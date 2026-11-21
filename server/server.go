@@ -1658,11 +1658,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[task] 新建任务 #%s «%s» 目标: %s", t.ID, t.Description, t.Goal)
 	// 共享的建后流程(seed + 种子意图 + 后台目标分解 + engine.Run),与 spawn_task 复用同一段。
 	// launchTask 内部异步,不阻塞 UI —— 目标分解在后台可见地进行。
-	var seedDomains []string
-	if req.DomainScopeEnabled {
-		seedDomains = strings.Split(t.Description, "\n")
-	}
-	s.launchTask(t, t.Description+" "+t.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent, seedDomains...)
+	s.launchTask(t, t.Description+" "+t.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent)
 	writeJSON(w, 201, taskDTO(t, s.resolvedTaskStatus(t)))
 }
 

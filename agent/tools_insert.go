@@ -227,24 +227,29 @@ func (t *ToolSet) insertAssets() actool.CoreTool {
 			var results []result
 			var errs []errEntry
 
-			// 资产闸门规则一次性载入；读取失败则跳过判定（不阻断插入）。
+			// Load the current gate once and fail before writes if scope cannot be read.
 			// 拦截规则 = 全局 ∪ 任务级 block；允许规则 = 任务级 allow。
-			blockRules, _ := t.as.ListAssetInterceptRules()
-			var allowRules []db.AssetInterceptRule
-			if t.taskID > 0 {
-				if tb, ta, err := t.as.TaskInterceptRulesSplit(t.taskID); err == nil {
-					blockRules = append(blockRules, tb...)
-					allowRules = ta
-				}
+			gate, err := t.as.LoadTaskAssetGate(t.taskID)
+			if err != nil {
+				return actool.Errorf("asset scope unavailable: " + err.Error()), nil
 			}
 
 			for i, item := range a.Assets {
 				// 资产闸门：先拦截后允许，被拒的资产禁止插入（跳过 Upsert 及后续副作用）。
-				domains, ips, urls := assetInterceptCandidates(item)
-				if d := db.EvaluateAssetGate(blockRules, allowRules, domains, ips, urls); !d.Allowed {
+				ip := item.IP
+				if ip == "" {
+					ip = item.ServiceIP
+				}
+				asset := &db.Asset{Type: strings.TrimSpace(item.Type), Domain: item.Domain, IP: ip, URL: item.URL, BoundDomains: item.BoundDomains}
+				decision := gate.Evaluate(asset)
+				if !gate.DomainScopeEnabled {
+					domains, ips, urls := assetInterceptCandidates(item)
+					decision = db.EvaluateAssetGate(gate.BlockRules, gate.AllowRules, domains, ips, urls)
+				}
+				if !decision.Allowed {
 					errs = append(errs, errEntry{
 						Index: i,
-						Error: fmt.Sprintf("资产 %s %s，已禁止插入", assetInputLabel(item), d.Reason),
+						Error: fmt.Sprintf("资产 %s %s，已禁止插入", assetInputLabel(item), decision.Reason),
 					})
 					continue
 				}

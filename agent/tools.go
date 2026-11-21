@@ -262,6 +262,19 @@ func pidList(raw []json.RawMessage) []int64 {
 	return out
 }
 
+// checkedAssetIDs preserves number/string compatibility without dropping unknowns.
+func checkedAssetIDs(raw []json.RawMessage) ([]int64, error) {
+	ids := make([]int64, 0, len(raw))
+	for i, item := range raw {
+		id := pid(item)
+		if id <= 0 {
+			return nil, fmt.Errorf("asset_ids[%d] must be a positive integer", i)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 func obj(props map[string]any, required ...string) map[string]any {
 	m := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
@@ -1065,7 +1078,13 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if priority == 0 {
 		priority = 5
 	}
-	anchors := pidList(it.AssetIDs)
+	anchors, err := checkedAssetIDs(it.AssetIDs)
+	if err != nil {
+		return 0, err
+	}
+	if len(anchors) > 0 && t.as == nil {
+		return 0, fmt.Errorf("asset scope unavailable: AssetStore is not configured")
+	}
 	// 资产拦截：意图绑定的资产若命中系统资产拦截规则，则禁止下发该意图。
 	if t.as != nil && len(anchors) > 0 {
 		hits, err := t.as.CheckAssetsIntercept(t.taskID, anchors)
@@ -1120,7 +1139,9 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 				Intents    []intentItem `json:"intents"`
 				intentItem              // 单条模式：顶层 summary/asset_ids/parent_ids/priority
 			}
-			_ = json.Unmarshal(in, &a)
+			if err := json.Unmarshal(in, &a); err != nil {
+				return actool.Errorf("invalid intent input: " + err.Error()), nil
+			}
 			batch := len(a.Intents) > 0
 			items := a.Intents
 			if !batch {

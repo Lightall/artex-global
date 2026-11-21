@@ -29,9 +29,8 @@ func ResolveTaskDomainScope(raw string, existing []TaskInterceptRuleInput) (stri
 	domains := make([]string, 0, len(items))
 	seen := make(map[string]bool, len(items))
 	for _, item := range items {
-		domain, err := idna.Lookup.ToASCII(item)
-		domain = strings.ToLower(strings.TrimSuffix(domain, "."))
-		if err != nil || !validTaskDomain(domain) {
+		domain := normalizeTaskDomain(item)
+		if domain == "" {
 			return "", nil, fmt.Errorf("%w: %q must be a domain without a scheme, port, path, wildcard or IP address", ErrTaskDomainScopeInvalid, item)
 		}
 		if !seen[domain] {
@@ -52,6 +51,15 @@ func ResolveTaskDomainScope(raw string, existing []TaskInterceptRuleInput) (stri
 		})
 	}
 	return strings.Join(domains, "\n"), rules, nil
+}
+
+func normalizeTaskDomain(raw string) string {
+	domain, err := idna.Lookup.ToASCII(raw)
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	if err != nil || !validTaskDomain(domain) {
+		return ""
+	}
+	return domain
 }
 
 func validTaskDomain(domain string) bool {

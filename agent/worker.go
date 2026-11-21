@@ -298,19 +298,19 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 // rides in the first user turn (together with the situational overview) so the system
 // prompt stays static/role-only — same move as the planner's situational block.
 // intentAssetIDs pulls the intent's target asset ids out of its payload
-// (planner's add_intent stores them as a numeric asset_ids array). nil on absence
-// or malformed payload.
-func intentAssetIDs(intent *db.Node) []int64 {
+// (planner's add_intent stores them as a numeric asset_ids array). Missing anchors
+// are valid; malformed payloads and invalid supplied IDs return an error.
+func intentAssetIDs(intent *db.Node) ([]int64, error) {
 	if intent == nil {
-		return nil
+		return nil, fmt.Errorf("intent is missing")
 	}
 	var p struct {
-		AssetIDs []int64 `json:"asset_ids"`
+		AssetIDs []json.RawMessage `json:"asset_ids"`
 	}
 	if err := json.Unmarshal(intent.Payload, &p); err != nil {
-		return nil
+		return nil, fmt.Errorf("invalid intent asset IDs: %w", err)
 	}
-	return p.AssetIDs
+	return checkedAssetIDs(p.AssetIDs)
 }
 
 func renderIntentTask(intent *db.Node) string {
@@ -359,6 +359,26 @@ func (w *Worker) ExecuteWithMessage(ctx context.Context, name string, taskID int
 }
 
 func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.AssetStore, ts *db.ExplorationStore, intent *db.Node, hooks harness.HookRunner, emit func(db.Activity), enr EnrichTrigger, notifyFinding func(int64, string), requestID, message string) (harness.TerminalReason, WriteCounts, error) {
+	ids, err := intentAssetIDs(intent)
+	if err != nil {
+		return "", WriteCounts{}, err
+	}
+	if len(ids) > 0 && as == nil {
+		return "", WriteCounts{}, fmt.Errorf("asset scope unavailable: AssetStore is not configured")
+	}
+	scope, err := taskScopeContext(as, taskID)
+	if err != nil {
+		return "", WriteCounts{}, err
+	}
+	if as != nil {
+		hits, err := as.CheckAssetsIntercept(taskID, ids)
+		if err != nil {
+			return "", WriteCounts{}, err
+		}
+		if len(hits) > 0 {
+			return "", WriteCounts{}, fmt.Errorf("intent asset scope rejected: %s", hits[0].Describe())
+		}
+	}
 	tsx := NewToolSet(ts, name)
 	tsx.SetFindingRecorder(w.findingRecorder)
 	tsx.SetTaskID(taskID)
@@ -393,14 +413,14 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	// inherit a parent run's background into the action reviewer.
 	ctx = intercept.WithReviewContext(ctx, runDir, intercept.ReviewBackground{})
 	overview := renderWorkerGraphOverview(tsx.graphOverviewData())
-	sysBody := workerSystem(w.proxyAddr, w.proxyCACert, w.workDir, runDir)
+	sysBody := workerSystem(w.proxyAddr, w.proxyCACert, w.workDir, runDir) + scope
 	if w.wantConstraints() {
 		sysBody += constraintBlock(ts) // 操作约束(若有)注入系统提示,worker 执行时严格遵守
 	}
 	// 意图块 → 意图锚定资产块 → 启动指令，依次追加到 system 尾部（与 constraintBlock 同一套追加法）。
 	sysBody += renderIntentTask(intent)
 	if as != nil {
-		if ids := intentAssetIDs(intent); len(ids) > 0 {
+		if len(ids) > 0 {
 			if assets, err := as.GetByIDs(ids); err == nil && len(assets) > 0 {
 				if b, err := json.Marshal(assets); err == nil {
 					sysBody += "\n\n本意图 asset_ids 对应的目标资产：\n" + string(b)

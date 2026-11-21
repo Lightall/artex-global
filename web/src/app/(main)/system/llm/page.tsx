@@ -296,11 +296,10 @@ function ProfileSheet({
   ];
   const EFFORT_LEVELS: { value: string; label: string }[] = [
     { value: NONE, label: t("profile.effort.opt.none") },
-    { value: "low", label: "low" },
-    { value: "medium", label: "medium" },
-    { value: "high", label: "high" },
-    { value: "xhigh", label: "xhigh" },
-    { value: "max", label: "max" },
+    ...["low", "medium", "high", "xhigh", "max"].map((level) => ({
+      value: level,
+      label: t("profile.effort.locked", { level }),
+    })),
   ];
 
   // 每次打开时从传入的 profile 灌一遍表单（新建则重置为默认值）。抽屉关掉再打开
@@ -683,11 +682,13 @@ function ProfileSheet({
             </div>
             <div className="flex items-center justify-between gap-4 border-t pt-3">
               <div className="grid gap-0.5">
-                <Label className="text-sm">{t("profile.effort.label")}</Label>
+                <Label htmlFor="llm-reasoning-effort" className="text-sm">
+                  {t("profile.effort.label")}
+                </Label>
                 <p className="text-muted-foreground text-xs">{t("profile.effort.hint")}</p>
               </div>
               <Select value={effort} onValueChange={setEffort}>
-                <SelectTrigger className="w-32 shrink-0">
+                <SelectTrigger id="llm-reasoning-effort" className="w-48 shrink-0">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

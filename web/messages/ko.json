@@ -3395,10 +3395,11 @@
         }
       },
       "effort": {
-        "label": "사고 강도 · reasoning_effort",
-        "hint": "독립적인 강도 단계입니다(OpenAI reasoning_effort / Anthropic output_config.effort). 일부 인터페이스는 thinking 필드가 없고 강도만으로 사고를 켤 수 있어, 사고 스위치를 보내지 않고 강도만 따로 설정할 수 있습니다.",
+        "label": "추론 강도",
+        "hint": "미지정 시 강도 필드를 보내지 않습니다. 선택한 값은 이 프로필의 요청에 고정 전송됩니다. 지원 및 매핑은 제공업체에 따라 다르며 사고 모드는 별도 설정입니다.",
+        "locked": "{level} 고정",
         "opt": {
-          "none": "보내지 않음(기본)"
+          "none": "미지정 (제공업체 기본값)"
         }
       },
       "testing": "테스트 중…",

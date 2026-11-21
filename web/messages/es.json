@@ -3395,10 +3395,11 @@
         }
       },
       "effort": {
-        "label": "Intensidad de razonamiento · reasoning_effort",
-        "hint": "Un nivel de intensidad independiente (OpenAI reasoning_effort / Anthropic output_config.effort). Algunas interfaces no tienen campo thinking y activan el razonamiento solo con la intensidad, así que puede fijar la intensidad por separado sin enviar el interruptor de razonamiento.",
+        "label": "Intensidad de razonamiento",
+        "hint": "Sin especificar omite el campo. El nivel seleccionado se envía en las solicitudes de este perfil. El soporte y la equivalencia dependen del proveedor. El modo de pensamiento es independiente.",
+        "locked": "Fijar {level}",
         "opt": {
-          "none": "No enviar (por defecto)"
+          "none": "Sin especificar (predeterminado)"
         }
       },
       "testing": "Probando…",

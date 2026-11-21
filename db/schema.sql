@@ -1312,6 +1312,21 @@ DROP TRIGGER IF EXISTS trg_task_intercept_rules_upd ON task_intercept_rules;
 CREATE TRIGGER trg_task_intercept_rules_upd BEFORE UPDATE ON task_intercept_rules
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- Recover the first release's provenance once when the task-mode column is added.
+DO $domain_scope_migration$
+BEGIN
+IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='tasks' AND column_name='domain_scope_enabled') THEN
+ALTER TABLE tasks ADD COLUMN domain_scope_enabled BOOLEAN NOT NULL DEFAULT false;
+UPDATE tasks task SET domain_scope_enabled=true
+WHERE NOT task.domain_scope_enabled
+  AND task.description=(SELECT string_agg(rule.pattern,E'\n' ORDER BY rule.id)
+       FROM task_intercept_rules rule WHERE rule.task_id=task.id AND rule.enabled AND rule.action='allow')
+  AND EXISTS(SELECT 1 FROM task_intercept_rules rule WHERE rule.task_id=task.id AND rule.enabled AND rule.action='allow')
+  AND NOT EXISTS(SELECT 1 FROM task_intercept_rules rule WHERE rule.task_id=task.id AND rule.enabled AND rule.action='allow'
+       AND (rule.kind<>'exact_domain' OR rule.note<>'Generated from the task domain list'));
+END IF;
+END $domain_scope_migration$;
+
 -- =====================================================================
 -- M. 漏洞 IM 推送
 --

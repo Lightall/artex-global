@@ -121,7 +121,7 @@ AND NOT EXISTS (
 	if _, err := tx.Exec(`UPDATE tasks SET
  name='',category_id=NULL,description='',goal='',paused=true,queued=false,queued_at=NULL,queue_mode='',
  llm_profile_id=NULL,active_llm_profile_id=NULL,llm_chain_revision=llm_chain_revision+1,
- company_id=NULL,parent_ref=NULL,timeout_seconds=0,coverage_enabled=true,pinned_at=NULL,
+ company_id=NULL,parent_ref=NULL,timeout_seconds=0,coverage_enabled=true,domain_scope_enabled=false,pinned_at=NULL,
  first_run_at=NULL,deadline_at=NULL,archived_at=now(),deleted_at=now()
 WHERE id=$1`, taskID); err != nil {
 		return err
@@ -236,6 +236,14 @@ WHERE archive.id=$1 FOR UPDATE OF archive,task`, archiveID).Scan(&taskID, &expID
 	if err != nil {
 		return nil, err
 	}
+	if rules, exists := snapshot.Tables["task_intercept_rules"]; exists {
+		if _, err := tx.Exec(`DELETE FROM task_intercept_rules WHERE task_id=$1`, taskID); err != nil {
+			return nil, err
+		}
+		if err := insertArchiveRows(tx, "task_intercept_rules", rules); err != nil {
+			return nil, fmt.Errorf("restore task asset rules: %w", err)
+		}
+	}
 	remappedTables["findings"], err = normalizeArchivedFindingVersions(remappedTables["findings"])
 	if err != nil {
 		return nil, err
@@ -321,13 +329,21 @@ func restoreTaskStub(tx *sql.Tx, row map[string]any, taskID, remaining int64) er
  llm_profile_id=archived.llm_profile_id,active_llm_profile_id=archived.active_llm_profile_id,
  llm_chain_revision=archived.llm_chain_revision,company_id=archived.company_id,parent_ref=archived.parent_ref,
  timeout_seconds=archived.timeout_seconds,plan_heartbeat_seconds=archived.plan_heartbeat_seconds,
- coverage_enabled=archived.coverage_enabled,pinned_at=archived.pinned_at,first_run_at=archived.first_run_at,
+ coverage_enabled=archived.coverage_enabled,domain_scope_enabled=COALESCE(archived.domain_scope_enabled,false),pinned_at=archived.pinned_at,first_run_at=archived.first_run_at,
  deadline_at=CASE WHEN archived.paused AND $3>0 THEN now()+make_interval(secs=>$3::double precision)
                   ELSE archived.deadline_at END,
  deleted_at=NULL,archived_at=NULL,completed_at=archived.completed_at,
  created_at=archived.created_at,updated_at=archived.updated_at
 FROM json_populate_record(NULL::tasks,$2::json) archived
 WHERE current.id=$1 AND archived.id=$1`, taskID, string(raw), remaining)
+	if err == nil {
+		if _, known := row["domain_scope_enabled"]; !known {
+			_, err = tx.Exec(`UPDATE tasks task SET domain_scope_enabled=true WHERE task.id=$1
+AND task.description=(SELECT string_agg(rule.pattern,E'\n' ORDER BY rule.id) FROM task_intercept_rules rule WHERE rule.task_id=task.id AND rule.enabled AND rule.action='allow')
+AND EXISTS(SELECT 1 FROM task_intercept_rules rule WHERE rule.task_id=task.id AND rule.enabled AND rule.action='allow')
+AND NOT EXISTS(SELECT 1 FROM task_intercept_rules rule WHERE rule.task_id=task.id AND rule.enabled AND rule.action='allow' AND (rule.kind<>'exact_domain' OR rule.note<>'Generated from the task domain list'))`, taskID)
+		}
+	}
 	return err
 }
 
@@ -389,6 +405,7 @@ func insertArchiveRows(tx *sql.Tx, table string, raw json.RawMessage) error {
 		"task_constraints": true, "activity": true, "task_asset_links": true, "findings": true,
 		"llm_records": true, "llm_usage": true, "skill_usage": true, "tool_usage": true,
 		"side_question_sessions": true, "side_question_requests": true,
+		"task_intercept_rules": true,
 	}
 	if !allowed[table] {
 		return fmt.Errorf("archive restore table %q is not allowed", table)
