@@ -157,11 +157,20 @@ type TaskCreateOptions struct {
 	CoverageEnabled *bool
 	// InterceptRules 是任务级资产拦截规则,创建时随任务在同一事务内写入 task_intercept_rules。
 	InterceptRules []TaskInterceptRuleInput
+	// DomainScopeEnabled treats description as a domain list and generates allows.
+	DomainScopeEnabled bool
 }
 
 // CreateTaskWithOptions creates an exploration, task, direct source relations,
 // and the ordered task LLM chain in one transaction.
 func (d *DB) CreateTaskWithOptions(description, goal string, opts TaskCreateOptions) (*Task, error) {
+	if opts.DomainScopeEnabled {
+		var err error
+		description, opts.InterceptRules, err = ResolveTaskDomainScope(description, opts.InterceptRules)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(opts.SourceTaskIDs) > MaxTaskSourceCount {
 		return nil, fmt.Errorf("too many source tasks: got %d, maximum is %d", len(opts.SourceTaskIDs), MaxTaskSourceCount)
 	}

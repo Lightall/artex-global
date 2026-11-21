@@ -32,6 +32,7 @@ import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import type { AssetInterceptRuleInput, TaskCategory, TaskTemplate } from "@/lib/types";
@@ -43,10 +44,14 @@ interface TemplateDraft {
   goal: string;
   categoryID: number | null;
   interceptRules: AssetInterceptRuleInput[];
+  domainScopeEnabled: boolean;
 }
 
 // TemplateSeed 是「另存为模板」时从创建表单带入的初值。
-type TemplateSeed = Pick<TemplateDraft, "description" | "goal" | "categoryID" | "interceptRules">;
+type TemplateSeed = Pick<
+  TemplateDraft,
+  "description" | "goal" | "categoryID" | "interceptRules" | "domainScopeEnabled"
+>;
 
 interface TaskTemplateManagerProps {
   open: boolean;
@@ -64,6 +69,7 @@ const emptyDraft = (): TemplateDraft => ({
   goal: "",
   categoryID: null,
   interceptRules: [],
+  domainScopeEnabled: false,
 });
 
 function templateDraft(template: TaskTemplate): TemplateDraft {
@@ -73,6 +79,7 @@ function templateDraft(template: TaskTemplate): TemplateDraft {
     goal: template.goal,
     categoryID: template.category_id ?? null,
     interceptRules: template.intercept_rules ?? [],
+    domainScopeEnabled: template.domain_scope_enabled ?? false,
   };
 }
 
@@ -112,6 +119,7 @@ function TaskTemplateManager({
           goal: seed.goal,
           categoryID: seed.categoryID,
           interceptRules: seed.interceptRules,
+          domainScopeEnabled: seed.domainScopeEnabled,
         });
       } else if (templates[0]) {
         setSelectedID(templates[0].id);
@@ -148,6 +156,7 @@ function TaskTemplateManager({
       description: draft.description.trim(),
       goal: draft.goal.trim(),
       category_id: draft.categoryID,
+      domain_scope_enabled: draft.domainScopeEnabled,
       intercept_rules: draft.interceptRules
         .map((r) => ({ ...r, pattern: r.pattern.trim() }))
         .filter((r) => r.pattern !== ""),
@@ -291,6 +300,15 @@ function TaskTemplateManager({
                   <FieldDescription>{t("manager.categoryHint")}</FieldDescription>
                 </Field>
                 <Field>
+                  <FieldLabel htmlFor="template-domain-scope">{t("manager.domainScopeLabel")}</FieldLabel>
+                  <Switch
+                    id="template-domain-scope"
+                    checked={draft.domainScopeEnabled}
+                    onCheckedChange={(value) => patchDraft({ domainScopeEnabled: value })}
+                  />
+                  <FieldDescription>{t("manager.domainScopeHint")}</FieldDescription>
+                </Field>
+                <Field>
                   <FieldLabel>{t("manager.rulesLabel")}</FieldLabel>
                   <AssetInterceptRulesEditor
                     value={draft.interceptRules}
@@ -351,6 +369,7 @@ interface TaskTemplateControlsProps {
   goal: string;
   categoryID?: number;
   interceptRules?: AssetInterceptRuleInput[];
+  domainScopeEnabled?: boolean;
   selectedTemplateID: number | null;
   onSelectedTemplateIDChange: (id: number | null) => void;
   onApply: (template: TaskTemplate) => void;
@@ -362,6 +381,7 @@ export function TaskTemplateControls({
   goal,
   categoryID,
   interceptRules,
+  domainScopeEnabled = false,
   selectedTemplateID,
   onSelectedTemplateIDChange,
   onApply,
@@ -460,6 +480,7 @@ export function TaskTemplateControls({
                   goal,
                   categoryID: categoryID ?? null,
                   interceptRules: interceptRules ?? [],
+                  domainScopeEnabled,
                 })
               }
             >

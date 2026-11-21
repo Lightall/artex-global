@@ -1188,6 +1188,8 @@
       "confirm": "Overwrite and use"
     },
     "manager": {
+      "domainScopeLabel": "Generate scope from domains",
+      "domainScopeHint": "New tasks use a domain list in the description. The backend generates allow rules and retains preset block rules.",
       "title": "Manage task templates",
       "description": "Templates store the description, goal, category, and task-level block/allow rules. Editing a template does not affect tasks already created.",
       "new": "New template",
@@ -2698,6 +2700,11 @@
       "deleteConfirm": "Delete"
     },
     "create": {
+      "domainLabel": "Authorized test domains",
+      "domainPlaceholder": "One domain per line, e.g. app.test.example.com",
+      "domainHint": "Enter domains separated by newlines or commas. Allow rules are generated when the task is created.",
+      "domainChecking": "Checking domains",
+      "domainPreview": "Allow rules will be generated for {count} domains",
       "newTask": "New task",
       "description": "Enter the test target and goal. You can expand advanced settings when needed.",
       "nameLabel": "Name (optional)",

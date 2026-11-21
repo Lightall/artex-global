@@ -627,6 +627,7 @@ CREATE TABLE IF NOT EXISTS task_templates (
 -- 补旧库(已发版,加列带 IF NOT EXISTS)。
 ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS category_id BIGINT REFERENCES task_categories(id) ON DELETE SET NULL;
 ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS intercept_rules JSONB NOT NULL DEFAULT '[]';
+ALTER TABLE task_templates ADD COLUMN IF NOT EXISTS domain_scope_enabled BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_task_templates_updated ON task_templates(updated_at DESC, id DESC);
 DROP TRIGGER IF EXISTS trg_task_templates_upd ON task_templates;
 CREATE TRIGGER trg_task_templates_upd BEFORE UPDATE ON task_templates

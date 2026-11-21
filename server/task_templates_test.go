@@ -44,11 +44,15 @@ func TestTaskTemplateHTTPCRUD(t *testing.T) {
 	name := fmt.Sprintf("http-template-%d", time.Now().UnixNano())
 	code, created := do(http.MethodPost, "/api/task-templates", map[string]any{
 		"name": name, "description": "description", "goal": "goal",
+		"domain_scope_enabled": true,
 	})
 	if code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%v", code, created)
 	}
 	id := int64(created["id"].(float64))
+	if created["domain_scope_enabled"] != true {
+		t.Fatal("domain mode missing from template create response")
+	}
 	t.Cleanup(func() { _, _ = m.pg.DeleteTaskTemplate(id) })
 
 	code, duplicate := do(http.MethodPost, "/api/task-templates", map[string]any{
@@ -61,6 +65,13 @@ func TestTaskTemplateHTTPCRUD(t *testing.T) {
 	code, updated := do(http.MethodPatch, fmt.Sprintf("/api/task-templates/%d", id), map[string]any{"goal": "patched goal"})
 	if code != http.StatusOK || updated["goal"] != "patched goal" || updated["description"] != "description" {
 		t.Fatalf("patch status=%d body=%v", code, updated)
+	}
+	if updated["domain_scope_enabled"] != true {
+		t.Fatal("partial template patch lost domain mode")
+	}
+	code, updated = do(http.MethodPatch, fmt.Sprintf("/api/task-templates/%d", id), map[string]any{"domain_scope_enabled": false})
+	if code != http.StatusOK || updated["domain_scope_enabled"] != false {
+		t.Fatal("explicit false mode patch failed")
 	}
 	code, _ = do(http.MethodPatch, fmt.Sprintf("/api/task-templates/%d", id), map[string]any{
 		"goal": strings.Repeat("界", db.MaxTaskTemplateTextRunes+1),

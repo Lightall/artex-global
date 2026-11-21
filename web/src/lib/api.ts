@@ -278,6 +278,7 @@ export const api = {
     planHeartbeatSeconds?: number;
     coverageEnabled?: boolean;
     interceptRules?: AssetInterceptRuleInput[];
+    domainScopeEnabled?: boolean;
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
@@ -292,7 +293,10 @@ export const api = {
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       coverage_enabled: input.coverageEnabled ?? true, // 默认开;false=关闭资产覆盖度功能
       intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
+      domain_scope_enabled: input.domainScopeEnabled ?? false,
     }),
+  previewTaskDomainScope: (domains: string) =>
+    post<{ domains: string[]; intercept_rules: AssetInterceptRuleInput[] }>("/task-domain-scope/preview", { domains }),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
   updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
@@ -310,11 +314,16 @@ export const api = {
     }),
   taskTemplates: () => get<{ templates: TaskTemplate[] }>("/task-templates").then((r) => arr(r.templates)),
   createTaskTemplate: (
-    input: Pick<TaskTemplate, "name" | "description" | "goal" | "category_id" | "intercept_rules">,
+    input: Pick<
+      TaskTemplate,
+      "name" | "description" | "goal" | "category_id" | "intercept_rules" | "domain_scope_enabled"
+    >,
   ) => post<TaskTemplate>("/task-templates", input),
   updateTaskTemplate: (
     id: number,
-    input: Partial<Pick<TaskTemplate, "name" | "description" | "goal" | "category_id" | "intercept_rules">>,
+    input: Partial<
+      Pick<TaskTemplate, "name" | "description" | "goal" | "category_id" | "intercept_rules" | "domain_scope_enabled">
+    >,
   ) => patch<TaskTemplate>(`/task-templates/${id}`, input),
   deleteTaskTemplate: (id: number) => del<{ deleted: number }>(`/task-templates/${id}`),
   updateTaskLLMProfiles: (id: string, llmProfileIds: number[], activeLLMProfileId?: number) =>

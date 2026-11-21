@@ -26,45 +26,48 @@ var (
 // TaskTemplate is a reusable task preset (description/goal + optional category
 // and task-level intercept/allow rules).
 type TaskTemplate struct {
-	ID             int64                    `json:"id"`
-	Name           string                   `json:"name"`
-	NKey           string                   `json:"-"`
-	Description    string                   `json:"description"`
-	Goal           string                   `json:"goal"`
-	CategoryID     *int64                   `json:"category_id"`
-	InterceptRules []TaskInterceptRuleInput `json:"intercept_rules"`
-	CreatedAt      time.Time                `json:"created_at"`
-	UpdatedAt      time.Time                `json:"updated_at"`
+	ID                 int64                    `json:"id"`
+	Name               string                   `json:"name"`
+	NKey               string                   `json:"-"`
+	Description        string                   `json:"description"`
+	Goal               string                   `json:"goal"`
+	CategoryID         *int64                   `json:"category_id"`
+	InterceptRules     []TaskInterceptRuleInput `json:"intercept_rules"`
+	DomainScopeEnabled bool                     `json:"domain_scope_enabled"`
+	CreatedAt          time.Time                `json:"created_at"`
+	UpdatedAt          time.Time                `json:"updated_at"`
 }
 
 // TaskTemplateInput is the create/update payload after normalization.
 type TaskTemplateInput struct {
-	Name           string
-	Description    string
-	Goal           string
-	CategoryID     *int64
-	InterceptRules []TaskInterceptRuleInput
+	Name               string
+	Description        string
+	Goal               string
+	CategoryID         *int64
+	InterceptRules     []TaskInterceptRuleInput
+	DomainScopeEnabled bool
 }
 
 // TaskTemplatePatch changes only fields flagged as set. Name/Description/Goal use
 // non-nil pointers; CategoryID/InterceptRules use explicit Set flags (so a nil
 // CategoryID can mean "clear" when SetCategoryID is true).
 type TaskTemplatePatch struct {
-	Name              *string
-	Description       *string
-	Goal              *string
-	CategoryID        *int64
-	SetCategoryID     bool
-	InterceptRules    []TaskInterceptRuleInput
-	SetInterceptRules bool
+	Name               *string
+	Description        *string
+	Goal               *string
+	CategoryID         *int64
+	SetCategoryID      bool
+	InterceptRules     []TaskInterceptRuleInput
+	SetInterceptRules  bool
+	DomainScopeEnabled *bool
 }
 
-const taskTemplateCols = `id, name, nkey, description, goal, category_id, intercept_rules, created_at, updated_at`
+const taskTemplateCols = `id, name, nkey, description, goal, category_id, intercept_rules, domain_scope_enabled, created_at, updated_at`
 
 func scanTaskTemplate(row interface{ Scan(...any) error }) (TaskTemplate, error) {
 	var t TaskTemplate
 	var rulesRaw []byte
-	if err := row.Scan(&t.ID, &t.Name, &t.NKey, &t.Description, &t.Goal, &t.CategoryID, &rulesRaw, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	if err := row.Scan(&t.ID, &t.Name, &t.NKey, &t.Description, &t.Goal, &t.CategoryID, &rulesRaw, &t.DomainScopeEnabled, &t.CreatedAt, &t.UpdatedAt); err != nil {
 		return t, err
 	}
 	t.InterceptRules = []TaskInterceptRuleInput{}
@@ -116,7 +119,7 @@ func normalizeTaskTemplateInput(in TaskTemplateInput) (TaskTemplateInput, string
 }
 
 func normalizeTaskTemplatePatch(patch TaskTemplatePatch) (TaskTemplatePatch, *string, error) {
-	if patch.Name == nil && patch.Description == nil && patch.Goal == nil && !patch.SetCategoryID && !patch.SetInterceptRules {
+	if patch.Name == nil && patch.Description == nil && patch.Goal == nil && !patch.SetCategoryID && !patch.SetInterceptRules && patch.DomainScopeEnabled == nil {
 		return patch, nil, fmt.Errorf("%w: no fields supplied", ErrTaskTemplateInvalid)
 	}
 	var nkey *string
@@ -171,10 +174,10 @@ func (d *DB) CreateTaskTemplate(in TaskTemplateInput) (*TaskTemplate, error) {
 		return nil, err
 	}
 	t, err := scanTaskTemplate(d.QueryRow(`
-INSERT INTO task_templates(name, nkey, description, goal, category_id, intercept_rules)
-VALUES ($1,$2,$3,$4,$5,$6)
+INSERT INTO task_templates(name, nkey, description, goal, category_id, intercept_rules, domain_scope_enabled)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
 ON CONFLICT (nkey) DO NOTHING
-RETURNING `+taskTemplateCols, in.Name, nkey, in.Description, in.Goal, in.CategoryID, rulesJSON))
+RETURNING `+taskTemplateCols, in.Name, nkey, in.Description, in.Goal, in.CategoryID, rulesJSON, in.DomainScopeEnabled))
 	if err == sql.ErrNoRows {
 		return nil, ErrTaskTemplateNameConflict
 	}
@@ -222,6 +225,7 @@ func (d *DB) UpdateTaskTemplate(id int64, in TaskTemplateInput) (*TaskTemplate, 
 	}
 	return d.PatchTaskTemplate(id, TaskTemplatePatch{
 		Name: &in.Name, Description: &in.Description, Goal: &in.Goal,
+		DomainScopeEnabled: &in.DomainScopeEnabled,
 	})
 }
 
@@ -243,7 +247,8 @@ SET name=CASE WHEN $2 THEN $3::text ELSE name END,
     description=CASE WHEN $5 THEN $6::text ELSE description END,
     goal=CASE WHEN $7 THEN $8::text ELSE goal END,
     category_id=CASE WHEN $9 THEN $10::bigint ELSE category_id END,
-    intercept_rules=CASE WHEN $11 THEN $12::jsonb ELSE intercept_rules END
+    intercept_rules=CASE WHEN $11 THEN $12::jsonb ELSE intercept_rules END,
+    domain_scope_enabled=CASE WHEN $13 THEN $14::boolean ELSE domain_scope_enabled END
 WHERE id=$1
 RETURNING `+taskTemplateCols,
 		id,
@@ -252,6 +257,7 @@ RETURNING `+taskTemplateCols,
 		patch.Goal != nil, patch.Goal,
 		patch.SetCategoryID, patch.CategoryID,
 		patch.SetInterceptRules, rulesJSON,
+		patch.DomainScopeEnabled != nil, patch.DomainScopeEnabled,
 	))
 	if err == sql.ErrNoRows {
 		return nil, ErrTaskTemplateNotFound

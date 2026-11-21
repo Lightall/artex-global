@@ -29,11 +29,12 @@ const (
 // category_id / intercept_rules presence is detected via the raw key set (see
 // decodeTaskTemplateRequest) so a PATCH can clear category to null.
 type taskTemplateRequest struct {
-	Name           *string                `json:"name"`
-	Description    *string                `json:"description"`
-	Goal           *string                `json:"goal"`
-	CategoryID     *int64                 `json:"category_id"`
-	InterceptRules []taskInterceptRuleReq `json:"intercept_rules"`
+	Name               *string                `json:"name"`
+	Description        *string                `json:"description"`
+	Goal               *string                `json:"goal"`
+	CategoryID         *int64                 `json:"category_id"`
+	InterceptRules     []taskInterceptRuleReq `json:"intercept_rules"`
+	DomainScopeEnabled *bool                  `json:"domain_scope_enabled"`
 }
 
 // decodeTaskTemplateRequest decodes the body into req and returns the set of
@@ -136,11 +137,12 @@ func (s *Server) pgCreateTaskTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	template, err := pg.CreateTaskTemplate(db.TaskTemplateInput{
-		Name:           stringValue(req.Name),
-		Description:    stringValue(req.Description),
-		Goal:           stringValue(req.Goal),
-		CategoryID:     req.CategoryID,
-		InterceptRules: rules,
+		Name:               stringValue(req.Name),
+		Description:        stringValue(req.Description),
+		Goal:               stringValue(req.Goal),
+		CategoryID:         req.CategoryID,
+		InterceptRules:     rules,
+		DomainScopeEnabled: req.DomainScopeEnabled != nil && *req.DomainScopeEnabled,
 	})
 	if err != nil {
 		writeTaskTemplateErr(w, err)
@@ -170,11 +172,11 @@ func (s *Server) pgUpdateTaskTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	_, catPresent := present["category_id"]
 	_, rulesPresent := present["intercept_rules"]
-	if req.Name == nil && req.Description == nil && req.Goal == nil && !catPresent && !rulesPresent {
+	if req.Name == nil && req.Description == nil && req.Goal == nil && !catPresent && !rulesPresent && req.DomainScopeEnabled == nil {
 		writeErr(w, http.StatusBadRequest, errTaskTemplateNoFields)
 		return
 	}
-	patch := db.TaskTemplatePatch{Name: req.Name, Description: req.Description, Goal: req.Goal}
+	patch := db.TaskTemplatePatch{Name: req.Name, Description: req.Description, Goal: req.Goal, DomainScopeEnabled: req.DomainScopeEnabled}
 	if catPresent {
 		patch.SetCategoryID = true
 		patch.CategoryID = req.CategoryID

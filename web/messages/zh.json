@@ -1188,6 +1188,8 @@
       "confirm": "覆盖并使用"
     },
     "manager": {
+      "domainScopeLabel": "按域名列表生成测试范围",
+      "domainScopeHint": "新任务只需在描述框填写域名列表，后端自动生成允许规则；预设拦截规则继续生效。",
       "title": "任务模板管理",
       "description": "模板保存描述、目标、分类与任务级拦截/允许规则；修改不会影响已经创建的任务。",
       "new": "新建模板",
@@ -2698,6 +2700,11 @@
       "deleteConfirm": "删除"
     },
     "create": {
+      "domainLabel": "授权测试域名",
+      "domainPlaceholder": "每行一个域名，例如 app.test.example.com",
+      "domainHint": "仅填域名，可用换行或逗号分隔。创建时自动生成对应的允许规则。",
+      "domainChecking": "正在核对域名",
+      "domainPreview": "将为 {count} 个域名生成允许规则",
       "newTask": "新建任务",
       "description": "填写测试对象与目标，高级参数可按需展开。",
       "nameLabel": "名称（可选）",

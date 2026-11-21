@@ -48,6 +48,7 @@ import { toast } from "sonner";
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
+import { TaskDomainScopePreview } from "@/components/task-domain-scope-preview";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
 import {
@@ -3152,6 +3153,7 @@ function CreateTaskSheet({
   const [description, setDescription] = React.useState("");
   const [goal, setGoal] = React.useState("");
   const [selectedTemplateID, setSelectedTemplateID] = React.useState<number | null>(null);
+  const [domainScopeEnabled, setDomainScopeEnabled] = React.useState(false);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [companies, setCompanies] = React.useState<Company[]>([]);
   const [sourceTaskIDs, setSourceTaskIDs] = React.useState<string[]>([]);
@@ -3221,6 +3223,7 @@ function CreateTaskSheet({
         name: name.trim(),
         categoryId: categoryID,
         description: description.trim(),
+        domainScopeEnabled,
         goal: goal.trim(),
         llmProfileIds: llmProfileIDs.map(Number),
         sourceTaskIds: sourceTaskIDs,
@@ -3239,6 +3242,7 @@ function CreateTaskSheet({
       setDescription("");
       setGoal("");
       setSelectedTemplateID(null);
+      setDomainScopeEnabled(false);
       setSourceTaskIDs([]);
       setCompanyIDs([]);
       setLLMProfileIDs([]);
@@ -3284,6 +3288,7 @@ function CreateTaskSheet({
               goal={goal}
               categoryID={categoryID}
               interceptRules={interceptRules}
+              domainScopeEnabled={domainScopeEnabled}
               selectedTemplateID={selectedTemplateID}
               onSelectedTemplateIDChange={setSelectedTemplateID}
               onApply={(template) => {
@@ -3291,6 +3296,7 @@ function CreateTaskSheet({
                 setGoal(template.goal);
                 setCategoryID(template.category_id ?? undefined);
                 setInterceptRules(template.intercept_rules ?? []);
+                setDomainScopeEnabled(template.domain_scope_enabled ?? false);
                 setUploadCount(0);
               }}
               portalContainer={sheetContentRef}
@@ -3316,16 +3322,17 @@ function CreateTaskSheet({
               <FieldDescription>{t("create.categoryHint")}</FieldDescription>
             </Field>
             <div className="grid gap-2">
-              <Label htmlFor="description">{t("create.descLabel")}</Label>
+              <Label htmlFor="description">{t(domainScopeEnabled ? "create.domainLabel" : "create.descLabel")}</Label>
               <Textarea
                 id="description"
                 className="min-h-32"
-                placeholder={t("create.descPlaceholder")}
+                placeholder={t(domainScopeEnabled ? "create.domainPlaceholder" : "create.descPlaceholder")}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
               />
+              {domainScopeEnabled && <TaskDomainScopePreview value={description} />}
               {/* 上传文件(可多选):暂存到 drafts/,把绝对路径追加进上方描述,worker 据此 Read/Bash 打开。 */}
-              <div className="flex flex-wrap items-center gap-2">
+              <div className={domainScopeEnabled ? "hidden" : "flex flex-wrap items-center gap-2"}>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -3378,11 +3385,13 @@ function CreateTaskSheet({
               />
               <FieldDescription>{t("create.companyHint")}</FieldDescription>
             </Field>
-            <Field>
-              <FieldLabel htmlFor="task-intercept-rules">{t("create.interceptLabel")}</FieldLabel>
-              <AssetInterceptRulesEditor value={interceptRules} onChange={setInterceptRules} />
-              <FieldDescription>{t("create.interceptHint")}</FieldDescription>
-            </Field>
+            {!domainScopeEnabled && (
+              <Field>
+                <FieldLabel htmlFor="task-intercept-rules">{t("create.interceptLabel")}</FieldLabel>
+                <AssetInterceptRulesEditor value={interceptRules} onChange={setInterceptRules} />
+                <FieldDescription>{t("create.interceptHint")}</FieldDescription>
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor="llm-profiles">{t("create.llmLabel")}</FieldLabel>
               <TaskLLMProfileChain

@@ -795,6 +795,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/tasks/category/batch", s.updateTasksCategoryBatch)
 	mux.HandleFunc("GET /api/task-templates", s.pgListTaskTemplates)
 	mux.HandleFunc("POST /api/task-templates", s.pgCreateTaskTemplate)
+	mux.HandleFunc("POST /api/task-domain-scope/preview", s.previewTaskDomainScope)
 	mux.HandleFunc("PATCH /api/task-templates/{id}", s.pgUpdateTaskTemplate)
 	mux.HandleFunc("DELETE /api/task-templates/{id}", s.pgDeleteTaskTemplate)
 	mux.HandleFunc("GET /api/tasks/{id}", s.getTask)
@@ -833,7 +834,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/tasks/{id}/scope", s.taskScopeList)
 	mux.HandleFunc("POST /api/tasks/{id}/scope", s.taskScopeAdd)
 	mux.HandleFunc("DELETE /api/tasks/{id}/scope/{sid}", s.taskScopeDelete)
-	mux.HandleFunc("GET /api/tasks/{id}/goals", s.listGoals)                       // 目标管理:列出本任务全部目标
+	mux.HandleFunc("GET /api/tasks/{id}/goals", s.listGoals) // 目标管理:列出本任务全部目标
 	mux.HandleFunc("GET /api/tasks/{id}/security-experiments", s.listSecurityExperiments)
 	mux.HandleFunc("POST /api/tasks/{id}/security-experiments", s.createSecurityExperiment)
 	mux.HandleFunc("POST /api/tasks/{id}/security-experiments/{caseID}/run", s.runSecurityExperiment)
@@ -1577,7 +1578,8 @@ type createTaskReq struct {
 	SeedFirstIntent      *bool    `json:"seed_first_intent,omitempty"` // 创建时直接下发一条种子意图(内容=描述+目标),让 worker 免等首轮 planner 直接开跑;省略/null=默认关闭,走标准先规划再执行。显式传 true 才开(CTF 常一 work 解决时可省掉开跑前的 planner 轮)。
 	CoverageEnabled      *bool    `json:"coverage_enabled,omitempty"`  // 资产覆盖度功能;省略/null=默认开(true)。false=关闭覆盖度计算/展示/自动累积范围+隐藏 add_task_scope/list_untested_assets。company 关联不受影响。
 	// InterceptRules 任务级资产拦截/允许规则(创建时录入,存 task_intercept_rules,不进全局表)。
-	InterceptRules []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
+	InterceptRules     []taskInterceptRuleReq `json:"intercept_rules,omitempty"`
+	DomainScopeEnabled bool                   `json:"domain_scope_enabled,omitempty"`
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -1586,7 +1588,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "bad json: "+err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Description) == "" {
+	if strings.TrimSpace(req.Description) == "" && !req.DomainScopeEnabled {
 		req.Description = "未命名任务"
 	}
 	if len(req.LLMProfileIDs) == 0 && req.LLMProfileID != nil {
@@ -1633,10 +1635,15 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		Name: strings.TrimSpace(req.Name), CategoryID: req.CategoryID,
 		SourceTaskIDs: sourceIDs, CompanyIDs: req.CompanyIDs, LLMProfileIDs: req.LLMProfileIDs,
 		TimeoutSeconds: req.TimeoutSeconds, PlanHeartbeatSeconds: req.PlanHeartbeatSeconds,
-		CoverageEnabled: req.CoverageEnabled,
-		InterceptRules:  interceptRules,
+		CoverageEnabled:    req.CoverageEnabled,
+		InterceptRules:     interceptRules,
+		DomainScopeEnabled: req.DomainScopeEnabled,
 	})
 	if err != nil {
+		if errors.Is(err, db.ErrTaskDomainScopeInvalid) {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		if errors.Is(err, db.ErrTaskCategoryInvalid) || errors.Is(err, db.ErrTaskCategoryNotFound) {
 			writeErr(w, 400, errCreateTaskCategoryInvalid)
 			return
@@ -1648,10 +1655,14 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	log.Printf("[task] 新建任务 #%s «%s» 目标: %s", t.ID, req.Description, req.Goal)
+	log.Printf("[task] 新建任务 #%s «%s» 目标: %s", t.ID, t.Description, t.Goal)
 	// 共享的建后流程(seed + 种子意图 + 后台目标分解 + engine.Run),与 spawn_task 复用同一段。
 	// launchTask 内部异步,不阻塞 UI —— 目标分解在后台可见地进行。
-	s.launchTask(t, req.Description+" "+req.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent)
+	var seedDomains []string
+	if req.DomainScopeEnabled {
+		seedDomains = strings.Split(t.Description, "\n")
+	}
+	s.launchTask(t, t.Description+" "+t.Goal, req.SeedFirstIntent != nil && *req.SeedFirstIntent, seedDomains...)
 	writeJSON(w, 201, taskDTO(t, s.resolvedTaskStatus(t)))
 }
 

@@ -1188,6 +1188,8 @@
       "confirm": "Sobrescribir y usar"
     },
     "manager": {
+      "domainScopeLabel": "Generar alcance desde dominios",
+      "domainScopeHint": "Las tareas nuevas usan una lista de dominios en la descripción. El servidor genera permisos y conserva las reglas de bloqueo.",
       "title": "Gestionar plantillas de tarea",
       "description": "Las plantillas guardan la descripción, el objetivo, la categoría y las reglas de bloqueo/permiso de nivel de tarea. Editar una plantilla no afecta a las tareas ya creadas.",
       "new": "Nueva plantilla",
@@ -2698,6 +2700,11 @@
       "deleteConfirm": "Eliminar"
     },
     "create": {
+      "domainLabel": "Dominios autorizados para pruebas",
+      "domainPlaceholder": "Un dominio por línea, p. ej. app.test.example.com",
+      "domainHint": "Separe los dominios con saltos de línea o comas. Las reglas de permiso se generan al crear la tarea.",
+      "domainChecking": "Comprobando dominios",
+      "domainPreview": "Se generarán reglas de permiso para {count} dominios",
       "newTask": "Nueva tarea",
       "description": "Introduzca qué va a probar y el objetivo. Puede expandir la configuración avanzada cuando lo necesite.",
       "nameLabel": "Nombre (opcional)",

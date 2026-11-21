@@ -45,11 +45,17 @@ const (
 	queuedFIFOSummary                = "대기열 등록: 먼저 대기 중인 작업이 있어, FIFO 순서대로 자동으로 시작합니다"
 )
 
-func (s *Server) launchTask(t *Task, seedText string, seedFirstIntent bool) {
+func (s *Server) launchTask(t *Task, seedText string, seedFirstIntent bool, seedDomains ...string) {
 	if !s.engine.beginTaskOperation(t.ID) {
 		return
 	}
-	s.seed(t, seedText)
+	if len(seedDomains) == 0 {
+		s.seed(t, seedText)
+	} else {
+		for _, domain := range seedDomains {
+			s.seed(t, "https://"+domain)
+		}
+	}
 	if seedFirstIntent {
 		s.seedFirstIntent(t)
 	}
