@@ -288,6 +288,7 @@ server {
 - 后端：`go run ./cmd/artex`（不带 `-tags embedui` 则不内嵌前端）
 - 前端：`cd web && npm run dev`（`/api` 反代到后端，带热更新）
 - 测试：`go test ./...`
+- 离线证据裁定：`go run ./cmd/evidence-audit -input review.json` 校验裁定、来源、对象与版本绑定，不调用模型或目标服务；用法见 [docs/evidence-disposition.md](docs/evidence-disposition.md)。
 - Mock 预览（无后端）：`cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
 
 ---

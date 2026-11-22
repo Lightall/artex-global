@@ -371,6 +371,7 @@ Local development and testing:
 - Backend: `go run ./cmd/artex` (without `-tags embedui` the frontend is not embedded)
 - Frontend: `cd web && npm run dev` (proxies `/api` to the backend, with hot reload)
 - Tests: `go test ./...`
+- Offline evidence review: `go run ./cmd/evidence-audit -input review.json` validates decision-to-evidence bindings without model or target traffic. See [docs/evidence-disposition.md](docs/evidence-disposition.md).
 - Mock preview (no backend): `cd web && NEXT_PUBLIC_MOCK=1 npm run dev`
 
 For other development topics (such as manual vulnerability re-verification), see the "开发" (Development) section of [`README.zh.md`](README.zh.md#开发).
