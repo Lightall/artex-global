@@ -1366,17 +1366,36 @@ type TaskListMetrics struct {
 	Findings       FindingSeverityCounts // findings 表里该任务的漏洞数（按严重度分档）
 }
 
-// TaskListMetricsAll returns list aggregates for every live task in one query.
-// The lateral lookups use the per-exploration indexes instead of grouping the
-// complete activity history on every poll.
-func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
-	rows, err := d.Query(`
+// TaskFindingSeverityCounts returns one task's findings grouped by severity.
+// An empty result is a real zero only when the query succeeds; callers must not
+// substitute zero values when the query fails.
+func (d *DB) TaskFindingSeverityCounts(taskID int64) (FindingSeverityCounts, error) {
+	var counts FindingSeverityCounts
+	err := d.QueryRow(`
+		SELECT COUNT(*) FILTER (WHERE severity='critical'),
+		       COUNT(*) FILTER (WHERE severity='high'),
+		       COUNT(*) FILTER (WHERE severity='medium'),
+		       COUNT(*) FILTER (WHERE severity='low')
+		FROM findings
+		WHERE task_id=$1`, taskID).Scan(
+		&counts.Critical,
+		&counts.High,
+		&counts.Medium,
+		&counts.Low,
+	)
+	return counts, err
+}
+
+// taskListMetricsAllSQL returns list aggregates for every live task in one
+// query. The lateral lookups use the per-exploration indexes instead of
+// grouping the complete activity history on every poll.
+const taskListMetricsAllSQL = `
 		SELECT task.exploration_id,
 		       COALESCE(token_metrics.input_tokens,0),
 		       COALESCE(token_metrics.output_tokens,0),
 		       COALESCE(token_metrics.cache_read_tokens,0),
 		       COALESCE(token_metrics.cache_write_tokens,0),
-		       COALESCE(latest_activity.created_at,0),
+		       COALESCE(latest_activity.last_activity,0),
 		       COALESCE(goal_metrics.total,0),
 		       COALESCE(goal_metrics.met,0),
 		       COALESCE(intent_metrics.running,0),
@@ -1394,10 +1413,10 @@ func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
 			WHERE exploration_id=task.exploration_id AND kind='result'
 		) token_metrics ON true
 		LEFT JOIN LATERAL (
-			SELECT EXTRACT(EPOCH FROM created_at)::bigint AS created_at
+			SELECT EXTRACT(EPOCH FROM activity.created_at)::bigint AS last_activity
 			FROM activity
-			WHERE exploration_id=task.exploration_id
-			ORDER BY created_at DESC
+			WHERE activity.exploration_id=task.exploration_id
+			ORDER BY activity.created_at DESC
 			LIMIT 1
 		) latest_activity ON true
 		LEFT JOIN LATERAL (
@@ -1419,7 +1438,10 @@ func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
 			FROM findings
 			WHERE task_id=task.id
 		) finding_metrics ON true
-		WHERE task.deleted_at IS NULL`)
+		WHERE task.deleted_at IS NULL`
+
+func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
+	rows, err := d.Query(taskListMetricsAllSQL)
 	if err != nil {
 		return nil, err
 	}

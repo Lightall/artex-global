@@ -1,7 +1,9 @@
 package db
 
 import (
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -113,5 +115,115 @@ VALUES ($1,'goal','{}','met'), ($1,'goal','{}','open')`, task.ExplorationID); er
 	}
 	if metrics.Goals.Total != 2 || metrics.Goals.Met != 1 {
 		t.Fatalf("unexpected goal metrics: %+v", metrics.Goals)
+	}
+}
+
+func TestTaskFindingSeverityCounts(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) - skipping", err)
+	}
+	defer d.Close()
+
+	task, err := d.CreateTask("task-finding-severity", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
+
+	for _, item := range []struct {
+		severity string
+		count    int
+	}{
+		{SeverityCritical, 41},
+		{SeverityHigh, 92},
+		{SeverityMedium, 39},
+		{SeverityLow, 6},
+	} {
+		if _, err := d.Exec(`
+INSERT INTO findings(task_id, severity)
+SELECT $1, $2 FROM generate_series(1, $3)`, task.ID, item.severity, item.count); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := d.TaskFindingSeverityCounts(task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := FindingSeverityCounts{Critical: 41, High: 92, Medium: 39, Low: 6}
+	if got != want {
+		t.Fatalf("finding severity counts=%+v, want %+v", got, want)
+	}
+}
+
+// TestTaskListMetricsAllLatestActivityUsesIndex protects the task-list query
+// from aliasing the projected epoch value as created_at. PostgreSQL then orders
+// by that expression instead of the indexed timestamp and scans every activity
+// row for each task.
+func TestTaskListMetricsAllLatestActivityUsesIndex(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) - skipping", err)
+	}
+	defer d.Close()
+
+	conn, err := d.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(t.Context(), `SET enable_seqscan=off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := conn.QueryContext(t.Context(), `EXPLAIN (FORMAT JSON) `+taskListMetricsAllSQL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		t.Fatal("EXPLAIN returned no plan")
+	}
+	var raw string
+	if err := rows.Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, "idx_act_latest") {
+		t.Fatalf("latest-activity index is absent from plan: %s", raw)
+	}
+	var explain []struct {
+		Plan any `json:"Plan"`
+	}
+	if err := json.Unmarshal([]byte(raw), &explain); err != nil {
+		t.Fatal(err)
+	}
+	var hasSort func(any) bool
+	hasSort = func(node any) bool {
+		switch value := node.(type) {
+		case map[string]any:
+			if value["Node Type"] == "Sort" {
+				return true
+			}
+			for _, child := range value {
+				if hasSort(child) {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range value {
+				if hasSort(child) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, item := range explain {
+		if hasSort(item.Plan) {
+			t.Fatalf("latest-activity lookup regressed to sorting activity rows: %s", raw)
+		}
 	}
 }

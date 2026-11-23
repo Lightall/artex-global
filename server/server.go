@@ -1160,8 +1160,18 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		active = t.ID
 	}
 	list := s.m.List()
-	metrics, _ := s.m.PG().TaskListMetricsAll()
-	archiveBlockers, _ := s.m.PG().TaskArchiveBlockers()
+	metrics, err := s.m.PG().TaskListMetricsAll()
+	if err != nil {
+		log.Printf("[task] load list metrics: %v", err)
+		writeErr(w, 500, "load task metrics")
+		return
+	}
+	archiveBlockers, err := s.m.PG().TaskArchiveBlockers()
+	if err != nil {
+		log.Printf("[task] load archive blockers: %v", err)
+		writeErr(w, 500, "load task archive state")
+		return
+	}
 	dtos := make([]TaskDTO, 0, len(list))
 	for _, t := range list {
 		dto := taskDTO(t, s.resolvedTaskStatus(t))
@@ -1852,7 +1862,24 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "task not found")
 		return
 	}
+	taskID, err := strconv.ParseInt(t.ID, 10, 64)
+	if err != nil || taskID <= 0 {
+		writeErr(w, 500, "invalid task id")
+		return
+	}
+	findings, err := s.m.PG().TaskFindingSeverityCounts(taskID)
+	if err != nil {
+		log.Printf("[task] load findings for %s: %v", t.ID, err)
+		writeErr(w, 500, "load task findings")
+		return
+	}
 	dto := taskDTO(t, s.resolvedTaskStatus(t))
+	dto.Findings = FindingSeverityDTO{
+		Critical: findings.Critical,
+		High:     findings.High,
+		Medium:   findings.Medium,
+		Low:      findings.Low,
+	}
 	archiveBlockers, _ := s.m.PG().TaskArchiveBlockers()
 	applyTaskArchiveBlocker(&dto, archiveBlockers)
 	writeJSON(w, 200, dto)
